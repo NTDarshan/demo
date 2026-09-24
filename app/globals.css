@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --canvas: #f5f6f8;
+  --surface: #ffffff;
+  --ink: #16213a;
+  --muted: #5b6478;
+  --line: #e3e6ec;
+  --accent: #2754c5;
+  --credit: #0f7b5f;
+  --pending: #a86400;
+  --debit: #b42318;
+  --reversed: #6b4fbb;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+}
