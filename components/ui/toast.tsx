@@ -1,6 +1,7 @@
 "use client";
 
 // Minimal toast: one live region, short messages that repeat the action ("Payment recorded").
+// Bottom-left, so it never covers the drawer's submit button on the right.
 
 import { CheckCircle2, AlertCircle, X } from "lucide-react";
 import * as React from "react";
@@ -35,7 +36,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div aria-live="polite" role="status" className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[min(380px,calc(100vw-32px))] flex-col gap-2">
+      <div aria-live="polite" role="status" className="pointer-events-none fixed bottom-4 left-4 z-[60] flex w-[min(380px,calc(100vw-32px))] flex-col gap-2">
         {toasts.map((t) => (
           <div key={t.id} className="pointer-events-auto flex animate-toast-in items-start gap-3 rounded-panel border border-line bg-surface p-3.5 shadow-overlay">
             {t.kind === "success" ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-credit" aria-hidden /> : <AlertCircle className="mt-0.5 size-4 shrink-0 text-debit" aria-hidden />}

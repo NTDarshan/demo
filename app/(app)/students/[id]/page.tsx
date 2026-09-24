@@ -2,9 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
-import { FeeHeadTracker } from "@/components/statement/fee-head-tracker";
-import { StatementHeader } from "@/components/statement/statement-header";
-import { StatementTabs } from "@/components/statement/statement-tabs";
+import { StudentWorkspace } from "@/components/statement/student-workspace";
 import { ApiError } from "@/lib/api/errors";
 import { can } from "@/lib/auth/permissions";
 import { getRole } from "@/lib/auth/session";
@@ -38,7 +36,7 @@ export default async function StudentPage({ params, searchParams }: Params) {
   if (!can(role, "students.view_all") && detail.student.id !== (await getDemoStudentId())) {
     redirect(`/students/${DEMO_STUDENT_ROLL_NO}`);
   }
-  const highlight = sp.highlight ? Number(sp.highlight) : null;
+  const highlight = sp.highlight && /^[0-9a-f-]{36}$/i.test(sp.highlight) ? sp.highlight : null;
 
   return (
     <div className="space-y-5">
@@ -48,9 +46,7 @@ export default async function StudentPage({ params, searchParams }: Params) {
           Students
         </Link>
       ) : null}
-      <StatementHeader detail={detail} />
-      <FeeHeadTracker heads={detail.feeHeads} />
-      <StatementTabs detail={detail} highlightEntryId={Number.isFinite(highlight) ? highlight : null} />
+      <StudentWorkspace detail={detail} role={role} highlightPaymentId={highlight} />
     </div>
   );
 }

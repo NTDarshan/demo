@@ -19,7 +19,7 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
       ref={ref}
       className={cn(
         controlClass,
-        "appearance-none bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%235B6478' stroke-width='1.5'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E\")] bg-[length:16px] bg-[right_10px_center] bg-no-repeat pr-9",
+        "select-chevron appearance-none pr-9",
         className,
       )}
       {...props}

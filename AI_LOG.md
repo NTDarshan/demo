@@ -105,3 +105,39 @@ This log is the source for the AI usage report in the documentation.
 - **What was wrong:** It worked, but the source was unreadable and would confuse a reviewer.
 - **How it was detected:** An odd-looking line in a file diff, confirmed with `od -c`.
 - **How it was fixed:** Replaced with `/\p{Diacritic}/gu`, which needs no escapes.
+
+## 10. Select chevron written as a Tailwind class with spaces (Phase 4)
+
+- **Generated:** The native `<Select>` had its chevron as an arbitrary Tailwind value,
+  `bg-[url("data:image/svg+xml,...width='16' height='16'...")]`.
+- **What was wrong:** Tailwind splits class names on spaces, so the SVG was broken into junk
+  classes and no chevron was ever drawn on any dropdown (Students filters, concession form).
+- **How it was detected:** A Playwright walkthrough printed the element's class attribute in a
+  locator error, showing fragments like `xmlns='http://www.w3.org/2000/svg'` as separate classes.
+- **How it was fixed:** Moved the chevron into a `.select-chevron` CSS class in `globals.css`.
+
+## 11. Drawer and receipt problems found in screenshots (Phase 4)
+
+- **Generated:** First versions of the record-payment drawer, the toast region and the receipt.
+- **What was wrong:**
+  1. Toasts sat bottom-right, exactly over the drawer's submit button.
+  2. The selected option in the segmented controls (mode, gateway outcome) was barely
+     distinguishable from the others (white on near-white).
+  3. At 390px "Bank transfer" was truncated to "Bank tra...".
+  4. The printed A5 receipt spilled its footer onto a second page.
+  5. The receipt title was set in uppercase with letter-spacing, which the brief's don'ts rule out.
+- **How it was detected:** Items 1 to 4 from Playwright screenshots and a PDF render of the
+  receipt; item 5 on re-reading the brief against the receipt code.
+- **How it was fixed:** Toasts moved bottom-left; selected segment filled with ink; four-option
+  controls wrap to 2 x 2 on phones; tighter print spacing (the densest receipt, 8 lines, now
+  prints on one A5 page); the title is sentence case.
+
+## 12. Walkthrough script waited on the wrong signal (Phase 4)
+
+- **Generated:** The scenario walkthrough waited for `?tab=payments` in the URL after the student's
+  timed-out payment.
+- **What was wrong:** The URL already had that parameter, so the wait returned immediately and the
+  log showed the previous toast, which looked like a missing "Payment pending" message.
+- **How it was detected:** The logged toast text did not match the action; an API query showed
+  the payment had in fact been recorded as PENDING.
+- **How it was fixed:** Wait for the "Payment pending" toast itself.

@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect } from "react";
 import { Balance, Money } from "@/components/money";
 import { EmptyState } from "@/components/ui/panel";
 import { INSTALLMENT_TONE, MappedBadge, PAYMENT_TONE } from "@/components/ui/status-badge";
@@ -12,8 +14,8 @@ import { MODE_LABEL } from "@/lib/domain/payment-state";
 
 type Props = {
   detail: StudentDetail;
-  /** Ledger entry id to flash (the signature moment after recording a payment). */
-  highlightEntryId?: number | null;
+  /** Payment to flash (the signature moment after recording a payment). */
+  highlightPaymentId?: string | null;
   paymentActions?: (payment: StudentDetail["payments"][number]) => React.ReactNode;
   emptyPaymentsAction?: React.ReactNode;
 };
@@ -21,7 +23,7 @@ type Props = {
 const TABS = ["statement", "installments", "payments"] as const;
 type Tab = (typeof TABS)[number];
 
-export function StatementTabs({ detail, highlightEntryId, paymentActions, emptyPaymentsAction }: Props) {
+export function StatementTabs({ detail, highlightPaymentId, paymentActions, emptyPaymentsAction }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const current = (TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "statement";
@@ -51,21 +53,31 @@ export function StatementTabs({ detail, highlightEntryId, paymentActions, emptyP
         </TabsList>
 
         <TabsContent value="statement">
-          <Passbook detail={detail} highlightEntryId={highlightEntryId ?? null} />
+          <Passbook detail={detail} highlightPaymentId={highlightPaymentId ?? null} />
         </TabsContent>
         <TabsContent value="installments">
           <InstallmentsTable detail={detail} />
         </TabsContent>
         <TabsContent value="payments">
-          <PaymentsTable detail={detail} actions={paymentActions} emptyAction={emptyPaymentsAction} />
+          <PaymentsTable detail={detail} actions={paymentActions} emptyAction={emptyPaymentsAction} highlightPaymentId={highlightPaymentId ?? null} />
         </TabsContent>
       </div>
     </Tabs>
   );
 }
 
-function Passbook({ detail, highlightEntryId }: { detail: StudentDetail; highlightEntryId: number | null }) {
+function useScrollToHighlight(id: string | null) {
+  useEffect(() => {
+    if (!id) return;
+    const el = document.querySelector<HTMLElement>(`[data-highlight="true"]:not([hidden])`);
+    el?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [id]);
+}
+
+function Passbook({ detail, highlightPaymentId }: { detail: StudentDetail; highlightPaymentId: string | null }) {
   const rows = detail.statement;
+  useScrollToHighlight(highlightPaymentId);
+  const isNew = (r: StudentDetail["statement"][number]) => highlightPaymentId !== null && r.type === "PAYMENT" && r.paymentId === highlightPaymentId;
   if (rows.length === 0) return <EmptyState title="No entries yet">Fee demand has not been raised for this student.</EmptyState>;
   const closing = rows[rows.length - 1]!.balancePaise;
   return (
@@ -75,7 +87,7 @@ function Passbook({ detail, highlightEntryId }: { detail: StudentDetail; highlig
         {rows.map((r) => {
           const linked = r.linkedEntryId ? rows.find((x) => x.entryId === r.linkedEntryId) : undefined;
           return (
-            <li key={r.entryId} id={`m-entry-${r.entryId}`} className={cn("px-4 py-3", r.muted && "text-muted", highlightEntryId === r.entryId && "row-flash")}>
+            <li key={r.entryId} id={`m-entry-${r.entryId}`} className={cn("px-4 py-3", r.muted && "text-muted", isNew(r) && "row-flash")} data-highlight={isNew(r) || undefined}>
               <div className="flex items-baseline justify-between gap-3">
                 <span className="text-sm text-muted">{formatDate(r.date)}</span>
                 <span className={cn("figure font-medium", r.creditPaise && !r.muted && "text-credit", r.muted && "line-through decoration-muted/60")}>
@@ -130,7 +142,8 @@ function Passbook({ detail, highlightEntryId }: { detail: StudentDetail; highlig
               <tr
                 key={r.entryId}
                 id={`entry-${r.entryId}`}
-                className={cn("scroll-mt-24 target:[&>td]:bg-accent/5", r.muted && "text-muted", highlightEntryId === r.entryId && "row-flash")}
+                className={cn("scroll-mt-24 target:[&>td]:bg-accent/5", r.muted && "text-muted", isNew(r) && "row-flash")}
+                data-highlight={isNew(r) || undefined}
               >
                 <td className="whitespace-nowrap figure" title={formatDateTime(r.date)}>
                   {formatDate(r.date)}
@@ -149,7 +162,15 @@ function Passbook({ detail, highlightEntryId }: { detail: StudentDetail; highlig
                   ) : null}
                   {r.detail ? <span className="block text-sm text-muted">{r.detail}</span> : null}
                 </td>
-                <td className="whitespace-nowrap font-mono text-sm text-muted">{r.reference ?? ""}</td>
+                <td className="whitespace-nowrap font-mono text-sm text-muted">
+                  {r.reference && r.paymentId ? (
+                    <Link href={`/payments/${r.paymentId}`} className="hover:text-accent hover:underline">
+                      {r.reference}
+                    </Link>
+                  ) : (
+                    (r.reference ?? "")
+                  )}
+                </td>
                 <td className="num">{r.debitPaise ? <Money paise={r.debitPaise} /> : null}</td>
                 <td className={cn("num", !r.muted && "text-credit")}>{r.creditPaise ? <Money paise={r.creditPaise} /> : null}</td>
                 <td className="num font-medium">
@@ -223,7 +244,18 @@ function InstallmentsTable({ detail }: { detail: StudentDetail }) {
   );
 }
 
-function PaymentsTable({ detail, actions, emptyAction }: { detail: StudentDetail; actions?: Props["paymentActions"]; emptyAction?: React.ReactNode }) {
+function PaymentsTable({
+  detail,
+  actions,
+  emptyAction,
+  highlightPaymentId,
+}: {
+  detail: StudentDetail;
+  actions?: Props["paymentActions"];
+  emptyAction?: React.ReactNode;
+  highlightPaymentId: string | null;
+}) {
+  useScrollToHighlight(highlightPaymentId);
   if (detail.payments.length === 0) {
     return (
       <EmptyState title="No payments yet" action={emptyAction}>
@@ -254,12 +286,14 @@ function PaymentsTable({ detail, actions, emptyAction }: { detail: StudentDetail
         </thead>
         <tbody>
           {detail.payments.map((p) => (
-            <tr key={p.id} className={cn(p.status === "FAILED" && "text-muted")}>
+            <tr key={p.id} className={cn(p.status === "FAILED" && "text-muted", p.id === highlightPaymentId && "row-flash")} data-highlight={p.id === highlightPaymentId || undefined}>
               <td className="figure whitespace-nowrap" title={formatDateTime(p.paidAt ?? p.createdAt)}>
                 {formatDate(p.paidAt ?? p.createdAt)}
               </td>
               <td className="whitespace-nowrap">
-                {p.receiptNo ? <span className="block font-mono text-sm">{p.receiptNo}</span> : null}
+                <Link href={`/payments/${p.id}`} className="block font-mono text-sm hover:text-accent hover:underline">
+                  {p.receiptNo ?? (p.status === "PENDING" ? "Awaiting gateway" : "No receipt")}
+                </Link>
                 {p.gatewayRef ? <span className="block font-mono text-xs text-muted">{p.gatewayRef}</span> : null}
                 {!p.gatewayRef && p.reference ? <span className="block text-xs text-muted">{p.reference}</span> : null}
               </td>

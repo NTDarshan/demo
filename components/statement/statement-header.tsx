@@ -7,7 +7,7 @@ import { formatINR } from "@/lib/money";
 
 const TONE_TEXT = { debit: "text-debit", credit: "text-credit", accent: "text-accent", ink: "text-ink" } as const;
 
-export function StatementHeader({ detail, actions }: { detail: StudentDetail; actions?: React.ReactNode }) {
+export function StatementHeader({ detail, actions, flash }: { detail: StudentDetail; actions?: React.ReactNode; flash?: boolean }) {
   const { student, balance, payments } = detail;
   const summary = describeBalance(balance);
   const pending = payments.filter((p) => p.status === "PENDING");
@@ -31,7 +31,12 @@ export function StatementHeader({ detail, actions }: { detail: StudentDetail; ac
       <div className="grid gap-6 border-t border-line px-5 py-5 sm:px-6 md:grid-cols-[1fr_auto] md:items-end">
         <div>
           <p className="text-sm text-muted">{summary.label}</p>
-          <p className={cn("figure mt-0.5 text-2xl font-semibold tracking-[-0.01em]", balance.balancePaise < 0 && "text-accent")} data-testid="balance">
+          <p
+            key={balance.balancePaise /* remount on change so the flash replays */}
+            className={cn("figure mt-0.5 inline-block rounded px-1 -mx-1 text-2xl font-semibold tracking-[-0.01em]", balance.balancePaise < 0 && "text-accent", flash && "balance-flash")}
+            data-testid="balance"
+            aria-live="polite"
+          >
             {formatINR(Math.abs(balance.balancePaise))}
           </p>
           <p className="mt-1.5 max-w-xl">
