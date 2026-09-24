@@ -123,3 +123,13 @@ export async function getReconRun(runId: string): Promise<ReconRunDetail> {
     items: mapped,
   };
 }
+
+/** An earlier run of the byte-identical file, if any (hash stored in totals.fileHash). */
+export async function earlierRunOfSameFile(current: { totals: ReconTotals & { fileHash?: string }; createdAt: string }): Promise<{ id: string; createdAt: string } | null> {
+  const hash = current.totals.fileHash;
+  if (!hash) return null;
+  const rows = await run<{ id: string; created_at: string }[]>(
+    db().from("reconciliation_runs").select("id, created_at").eq("totals->>fileHash", hash).lt("created_at", current.createdAt).order("created_at", { ascending: false }).limit(1),
+  );
+  return rows[0] ? { id: rows[0].id, createdAt: rows[0].created_at } : null;
+}

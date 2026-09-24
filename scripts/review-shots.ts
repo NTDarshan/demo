@@ -16,7 +16,10 @@ const base = process.env.BASE_URL ?? "http://localhost:3000";
 type Shot = { name: string; path: string; role?: "admin" | "accountant" | "student"; before?: (page: Page) => Promise<void>; fullPage?: boolean };
 
 const SHOTS: Shot[] = [
-  { name: "dashboard", path: "/" },
+  { name: "dashboard", path: "/", before: async (page) => void (await page.locator(".recharts-surface").first().waitFor()) },
+  { name: "reconciliation", path: "/reconciliation" },
+  { name: "audit", path: "/audit" },
+  { name: "payments", path: "/payments" },
   { name: "students", path: "/students" },
   { name: "students-filtered", path: "/students?status=OVERDUE&course=BCA" },
   { name: "students-empty", path: "/students?q=zzzz" },
@@ -62,6 +65,8 @@ try {
     for (const w of widths) {
       const context = await browser.newContext({ viewport: { width: w.width, height: w.height }, deviceScaleFactor: 1, reducedMotion: "reduce" });
       await context.addCookies([{ name: "kosha_role", value: shot.role ?? "admin", url: base }]);
+      // The demo guide opens itself on a first visit; mark it seen so it doesn't cover the page.
+      await context.addInitScript(() => window.localStorage.setItem("kosha.demoGuideSeen", "1"));
       const page = await context.newPage();
       await page.goto(base + shot.path, { waitUntil: "networkidle" });
       await page.evaluate(() => document.fonts.ready);

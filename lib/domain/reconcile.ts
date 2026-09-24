@@ -27,6 +27,14 @@ export const BUCKET_LABEL: Record<Bucket, string> = {
   MISSING_IN_SETTLEMENT: "Recorded here, missing in settlement",
 };
 
+/** Short labels for tight places (badges in lists). */
+export const BUCKET_SHORT: Record<Bucket, string> = {
+  MATCHED: "Matched",
+  AMOUNT_MISMATCH: "Amount mismatch",
+  SETTLED_PENDING_HERE: "Settled, pending here",
+  MISSING_IN_SETTLEMENT: "Missing in settlement",
+};
+
 const SETTLED_STATUSES = new Set(["SUCCESS", "SETTLED", "CAPTURED"]);
 const NON_SETTLEMENT_STATUSES = new Set(["FAILED", "REFUNDED", "REVERSED", "CHARGEBACK", "DECLINED", "CANCELLED"]);
 const GATEWAY_REF_RE = /^[A-Z0-9_-]{4,64}$/;

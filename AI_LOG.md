@@ -141,3 +141,32 @@ This log is the source for the AI usage report in the documentation.
 - **How it was detected:** The logged toast text did not match the action; an API query showed
   the payment had in fact been recorded as PENDING.
 - **How it was fixed:** Wait for the "Payment pending" toast itself.
+
+## 13. Dashboard problems found in screenshots (Phase 5)
+
+- **Generated:** First version of the dashboard's needs-attention list, summary strip and trend chart.
+- **What was wrong:**
+  1. After the sample file was reconciled twice, every open reconciliation item was listed twice.
+  2. The badge "Recorded here, missing in settlement" overflowed its 170px column into the text.
+  3. The summary said "Needs attention 7" while the panel below said "27 items" (the two counted
+     different things).
+  4. The trend used a smoothed (`monotone`) curve, which invents shape between daily totals and
+     exaggerates spikes; the last point was clipped at the right edge.
+  5. In one desktop capture the chart area was empty: Recharts' `ResponsiveContainer` had not
+     measured its width before the screenshot.
+- **How it was detected:** Reading the 1440px and 390px dashboard screenshots.
+- **How it was fixed:** Open items are de-duplicated by bucket and reference (newest run wins);
+  short bucket labels for badges; the fourth summary cell is now "Pending payments" and the panel
+  spells out each group's count; straight segments and a right margin; `initialDimension` on the
+  container so the chart draws on first paint.
+
+## 14. Wrong element read by two walkthrough checks (Phase 5)
+
+- **Generated:** Playwright checks that read `getByRole("alert")` for the upload error and checked
+  the auto-opening demo guide immediately after page load.
+- **What was wrong:** Next.js's route announcer also has `role="alert"`, so the first check read an
+  empty string; the guide opens after hydration, so the second check ran too early. Both reported
+  failures in features that worked.
+- **How it was detected:** The results contradicted what the screen showed; re-checked with
+  targeted locators.
+- **How it was fixed:** Filter alerts by text and wait for the dialog instead of checking once.

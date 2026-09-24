@@ -62,6 +62,15 @@ export async function getDashboard(now = new Date()): Promise<Dashboard> {
     ),
   ]);
   const balances = balancesRaw.map(toBalance);
+  // The same file reconciled twice leaves the same open item in both runs; show each
+  // reference once, from the newest run (rows are already newest first).
+  const seenRefs = new Set<string>();
+  const openItems = reconItems.filter((r) => {
+    const key = `${r.bucket}:${r.gateway_ref}`;
+    if (seenRefs.has(key)) return false;
+    seenRefs.add(key);
+    return true;
+  });
 
   let collected = 0;
   let collectedCount = 0;
@@ -130,13 +139,13 @@ export async function getDashboard(now = new Date()): Promise<Dashboard> {
       advancePaise: balances.reduce((s, b) => s + Math.max(-b.balancePaise, 0), 0),
       pendingCount: pendingPayments.length,
       pendingPaise: pendingPayments.reduce((s, p) => s + p.amountPaise, 0),
-      openReconItems: reconItems.length,
+      openReconItems: openItems.length,
     },
     trend,
     overdueByCourse: [...byCourse.values()].sort((a, b) => b.overduePaise - a.overduePaise),
     attention: {
       pendingPayments,
-      reconItems: reconItems.map((r) => ({
+      reconItems: openItems.map((r) => ({
         itemId: r.id,
         runId: r.run_id,
         bucket: r.bucket,

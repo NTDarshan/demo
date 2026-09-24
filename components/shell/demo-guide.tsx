@@ -1,26 +1,94 @@
 "use client";
 
-import { BookMarked } from "lucide-react";
+// Dismissible guide to the seven scenario students. Opens by itself on a browser's first
+// visit (remembered in localStorage), and holds "Reset demo data" for admins.
+
+import { BookMarked, RotateCcw } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { useToast } from "@/components/ui/toast";
 import { can, type Role } from "@/lib/auth/permissions";
+import { api, errorMessage } from "@/lib/client/api";
 import { SCENARIOS } from "@/lib/demo/scenarios";
 
-// Phase 5 adds "Reset demo data" here for admins.
-export function DemoGuide({ role, footer }: { role: Role; footer?: React.ReactNode }) {
+const SEEN_KEY = "kosha.demoGuideSeen";
+
+export function DemoGuide({ role }: { role: Role }) {
+  const router = useRouter();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const canBrowse = can(role, "students.view_all");
+
+  useEffect(() => {
+    try {
+      if (!window.localStorage.getItem(SEEN_KEY)) {
+        setOpen(true);
+        window.localStorage.setItem(SEEN_KEY, "1");
+      }
+    } catch {
+      // Storage blocked (private mode): just don't auto-open.
+    }
+  }, []);
+
+  async function reset() {
+    setResetting(true);
+    try {
+      await api("/api/demo/reset", { body: {} });
+      toast.success("Demo data reset", "60 students and their history are back to the starting story.");
+      setConfirming(false);
+      setOpen(false);
+      router.refresh();
+    } catch (err) {
+      toast.error("Could not reset demo data", errorMessage(err));
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const footer = can(role, "demo.reset") ? (
+    confirming ? (
+      <div className="space-y-3">
+        <p className="text-sm">This deletes every payment, concession and reconciliation run made during the demo and reloads the seed. It cannot be undone.</p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setConfirming(false)} disabled={resetting}>
+            Keep data
+          </Button>
+          <Button variant="danger" onClick={reset} loading={resetting}>
+            {resetting ? "Resetting" : "Reset demo data"}
+          </Button>
+        </div>
+      </div>
+    ) : (
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted">Start the story over at any time.</p>
+        <Button variant="secondary" onClick={() => setConfirming(true)}>
+          <RotateCcw aria-hidden />
+          Reset demo data
+        </Button>
+      </div>
+    )
+  ) : undefined;
+
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
+    <Sheet
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setConfirming(false);
+      }}
+    >
       <SheetTrigger asChild>
         <Button variant="ghost" aria-label="Open demo guide">
           <BookMarked aria-hidden />
           <span className="hidden md:inline">Demo guide</span>
         </Button>
       </SheetTrigger>
-      <SheetContent title="Demo guide" description="Seven students set up to show each part of the ledger." footer={footer}>
+      <SheetContent title="Demo guide" description="Seven students set up to show each part of the ledger. Switch roles in the top bar." footer={footer}>
         {!canBrowse ? (
           <p className="mb-4 rounded tint-accent px-3 py-2 text-sm">
             You are viewing as a student. Switch to Admin or Accountant in the top bar to open the other students.
@@ -48,6 +116,15 @@ export function DemoGuide({ role, footer }: { role: Role; footer?: React.ReactNo
             </li>
           ))}
         </ol>
+        {canBrowse ? (
+          <p className="mt-4 border-t border-line pt-4 text-sm text-muted">
+            For reconciliation, open{" "}
+            <Link href="/reconciliation" onClick={() => setOpen(false)} className="text-accent hover:underline">
+              Reconciliation
+            </Link>{" "}
+            and upload the sample settlement file. It produces all four buckets.
+          </p>
+        ) : null}
       </SheetContent>
     </Sheet>
   );
