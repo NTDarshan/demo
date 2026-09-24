@@ -3,7 +3,16 @@
 
 export const TIME_ZONE = "Asia/Kolkata";
 
-const dateFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: TIME_ZONE });
+// Day, month and year come from Intl (for the time zone), but month names are our own:
+// newer ICU data abbreviates September as "Sept" in en-GB, and we want "24 Sep 2026".
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const partsFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "numeric", year: "numeric", timeZone: TIME_ZONE });
+const dateFmt = {
+  format(d: Date): string {
+    const parts = Object.fromEntries(partsFmt.formatToParts(d).map((p) => [p.type, p.value]));
+    return `${Number(parts.day)} ${MONTHS[Number(parts.month) - 1]} ${parts.year}`;
+  },
+};
 const timeFmt = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: TIME_ZONE });
 const isoDateFmt = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: TIME_ZONE });
 

@@ -34,7 +34,8 @@ export type StatementRow = {
   date: string;
   type: LedgerType;
   description: string;
-  reference: string | null;
+  reference: string | null; // a code: receipt number or gateway ref
+  detail: string | null; // secondary line under the description, e.g. who approved a concession
   debitPaise: number | null;
   creditPaise: number | null;
   balancePaise: number;
@@ -69,6 +70,7 @@ export function buildStatement(
       type: e.type,
       description: e.note ?? e.type,
       reference: null,
+      detail: null,
       debitPaise: e.amountPaise > 0 ? e.amountPaise : null,
       creditPaise: e.amountPaise < 0 ? -e.amountPaise : null,
       balancePaise: balance,
@@ -97,7 +99,7 @@ export function buildStatement(
     } else if (e.type === "CONCESSION") {
       const c = concessions.get(e.refId);
       row.description = c ? `Concession on ${c.label}: ${c.reason}` : (e.note ?? "Concession");
-      row.reference = c ? `Approved by ${c.approvedBy}` : null;
+      row.detail = c ? `Approved by ${c.approvedBy}` : null;
     }
     return row;
   });

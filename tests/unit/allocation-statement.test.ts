@@ -92,7 +92,8 @@ describe("buildStatement", () => {
   it("reads concessions as credits with the reason and approver", () => {
     const c = rows.find((r) => r.type === "CONCESSION")!;
     expect(c.description).toBe("Concession on Tuition Term 1: Merit");
-    expect(c.reference).toBe("Approved by Dean");
+    expect(c.detail).toBe("Approved by Dean");
+    expect(c.reference).toBeNull();
   });
 });
 
