@@ -220,8 +220,8 @@ begin
   if p_amount_paise is null or p_amount_paise <= 0 then
     perform _fail('invalid_amount', 'Amount must be greater than zero.');
   end if;
-  if p_amount_paise > 100000000 then  -- Rs 10,00,000: guards against a fat-fingered amount
-    perform _fail('amount_too_large', 'Amount is above the Rs 10,00,000 limit for a single payment. Split it or check the figure.');
+  if p_amount_paise > 100000000 then  -- ₹10,00,000: guards against a fat-fingered amount
+    perform _fail('amount_too_large', 'Amount is above the ₹10,00,000 limit for a single payment. Split it or check the figure.');
   end if;
   if p_mode is null or p_mode not in ('CASH', 'UPI', 'CARD', 'BANK_TRANSFER') then
     perform _fail('invalid_mode', 'Payment mode must be cash, UPI, card or bank transfer.');
@@ -461,7 +461,7 @@ begin
   v_remaining := _installment_remaining(v_inst.id);
   if p_amount_paise > v_remaining then
     perform _fail('concession_exceeds_remaining', format(
-      'Concession is more than what is still owed on %s (Rs %s). Lower the amount.',
+      'Concession is more than what is still owed on %s (₹%s). Lower the amount.',
       v_inst.label, to_char(v_remaining / 100.0, 'FM99,99,99,990.00')));
   end if;
 
@@ -571,9 +571,10 @@ begin
     end if;
     select status into v_status from payments where id = v_item.payment_id;
     if v_status = 'PENDING' then
+      v_note := coalesce(v_note, 'Confirmed from the gateway settlement file');
       perform confirm_payment(v_item.payment_id, p_actor,
-        coalesce(v_note, format('Marked paid from reconciliation: settled %s',
-                                to_char(v_item.settled_at at time zone 'Asia/Kolkata', 'DD Mon YYYY'))));
+        format('Marked paid from reconciliation: settled %s',
+               to_char(v_item.settled_at at time zone 'Asia/Kolkata', 'DD Mon YYYY')));
     elsif v_status = 'SUCCESS' then
       v_note := coalesce(v_note, 'Already confirmed before this item was resolved');
     else
