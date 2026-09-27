@@ -271,3 +271,69 @@ This log is the source for the AI usage report in the documentation.
 - **How it was detected:** The first API tests.
 - **How it was fixed:** Figures typed by the user are known amounts, and the "looked up" check
   ignores them. Both cases are unit tested.
+
+## 24. The sample sent to the import assistant missed the one failed row (AI-3)
+
+- **Generated:** Smart import sent the first 15 rows plus 10 spread across the file.
+- **What was wrong:** The gateway report's only "Failed" row is its last line. It was not in the
+  sample, so the proposed mapping covered only "Captured", and the full file would have had an
+  unmapped status.
+- **How it was detected:** Reading the first proposal from the mapping API.
+- **How it was fixed:** `sampleRows()` now includes at least one row for every distinct value of
+  each category-like column (12 values or fewer), and the preview lists every status value in the
+  whole file with a dropdown, blocking reconciliation until each one is mapped. Unit tested.
+
+## 25. Same LangGraph node-name clash again (AI-3)
+
+- **Generated:** The parent-message graph had a state field `draft` and a node `"draft"`.
+- **What was wrong:** The same mistake as entry 19, repeated in new code: every draft failed with
+  an internal error.
+- **How it was detected:** The first API call; the dev server log.
+- **How it was fixed:** The node is now `write`. Every graph in `lib/ai` was checked for the same
+  clash.
+
+## 26. Drafted messages guessed the student's gender (AI-3)
+
+- **Generated:** The first parent-message prompt said nothing about gender.
+- **What was wrong:** The model wrote "your daughter Sneha Iyer" and, in Hindi, "आपके पुत्र"
+  ("your son") for Rohan Kulkarni. Kosha does not record gender, so these were guesses from the
+  names.
+- **How it was detected:** Reading the English and Hindi drafts from the API.
+- **How it was fixed:** The prompt says to use "your ward" or the student's name, and never
+  son/daughter or he/she in any of the three languages. `verifyMessage()` now fails a draft
+  containing gendered words in English, Kannada or Hindi, including a draft a person has edited.
+  Unit tested.
+
+## 27. A wrong day/month choice would convert without errors (AI-3)
+
+- **Generated:** Smart import trusted "every row converts" as the sign of a correct date format.
+- **What was wrong:** With MM/DD/YYYY picked for a DD/MM/YYYY file, 10/08/2026 still converts, as 8
+  October. Only dates with a day above 12 fail, so a file from the first 12 days of a month would
+  reconcile with wrong dates and no warning.
+- **How it was detected:** A unit test expected the first failure on line 2 and got line 4.
+- **How it was fixed:** `dateFormatAmbiguous()` detects when every date reads both ways. The
+  preview then requires the accountant to tick a box confirming the format before reconciling.
+
+## 28. The import assistant chose YYYY/MM/DD for dashed dates, twice (AI-3)
+
+- **Generated:** The date-format choices were bare names (`ISO`, `YYYY/MM/DD`, ...), and the retry
+  feedback listed the failing values.
+- **What was wrong:** For `2026-08-10` the model chose `YYYY/MM/DD` (slashes). After the failed check
+  it chose it again, so 0 of 36 rows converted.
+- **How it was detected:** The AI-3 eval (5/6).
+- **How it was fixed:** The schema describes each format with an example, and the retry feedback
+  lists the formats the parser found to read every value. The eval passes 6/6 twice in a row.
+
+## 29. "Who owes the most?" answered from the wrong group, with correct figures (AI-2, found in AI-3)
+
+- **Generated:** `search_students` described its `status` filter as "DUE: owes, nothing overdue".
+- **What was wrong:** For "Which student owes the most?" the model kept adding `status: DUE` or
+  `status: OVERDUE`. Once it answered ₹1,12,500 (the top of the DUE students only) when three
+  students owe ₹1,73,000. Every figure was real, so the verifier passed it: the verifier catches
+  made-up numbers, not a wrong filter.
+- **How it was detected:** The full `npm run eval:ai` run (Ask Kosha 7/8), then asking the
+  question three times: two runs used OVERDUE and one used DUE.
+- **How it was fixed:** The filter's description says to leave it null unless the user names a
+  status, because both OVERDUE and DUE students owe money. Five runs in a row used no filter,
+  and the eval passes 8/8 twice. This is why the evals check answers against the database
+  independently, not just the verifier.

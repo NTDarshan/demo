@@ -3,7 +3,7 @@
 //   npm run db:setup   apply 001, 002, 003 to an empty database
 //   npm run db:reset   drop Kosha's objects, then apply 001, 002, 003
 //   npm run db:verify  run scripts/verify-ledger.sql
-//   npm run db:migrate apply 004_ai.sql to a database that already has 001-003 (idempotent)
+//   npm run db:migrate apply the AI migrations (004, 005) to a database that already has 001-003 (idempotent)
 //
 // Reads DATABASE_URL from .env.local (or the environment). Each command runs in a single
 // transaction, so a failure leaves the database as it was.
@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const migrations = ["001_schema.sql", "002_functions.sql", "003_seed.sql", "004_ai.sql"].map((f) =>
+const migrations = ["001_schema.sql", "002_functions.sql", "003_seed.sql", "004_ai.sql", "005_ai_messages.sql"].map((f) =>
   join(root, "supabase", "migrations", f),
 );
 
@@ -47,7 +47,7 @@ const KOSHA_FUNCTIONS = [
   "record_payment", "confirm_payment", "fail_payment", "reverse_payment", "apply_concession",
   "create_recon_run", "resolve_recon_item", "reset_demo",
   "_seed_clock", "_ist", "_seed_term_due", "_seed_pay", "seed_demo",
-  "save_ai_investigation", "decide_ai_investigation",
+  "save_ai_investigation", "decide_ai_investigation", "log_message_draft",
 ];
 
 function loadEnv(): string {
@@ -122,9 +122,10 @@ async function main() {
     }
 
     if (command === "migrate") {
-      const file = migrations[migrations.length - 1]!;
-      console.log(`Applying ${file.split(/[\/]/).pop()}...`);
-      await client.query(readFileSync(file, "utf8"));
+      for (const file of migrations.slice(3)) {
+        console.log(`Applying ${file.split(/[\\/]/).pop()}...`);
+        await client.query(readFileSync(file, "utf8"));
+      }
     }
 
     console.log("Verifying ledger...");

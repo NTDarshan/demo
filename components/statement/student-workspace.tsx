@@ -7,6 +7,7 @@
 import { BadgePercent, CreditCard, Plus } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
+import { ParentMessageButton, ParentMessageDrawer } from "@/components/ai/parent-message-drawer";
 import { ConcessionDrawer } from "@/components/payments/concession-drawer";
 import { PaymentMenu } from "@/components/payments/payment-menu";
 import { PaymentTransitionDrawer, type TransitionTarget } from "@/components/payments/payment-transition-drawer";
@@ -31,11 +32,12 @@ const toTarget = (p: Payment): TransitionTarget => ({
   allocations: p.allocations,
 });
 
-export function StudentWorkspace({ detail, role, highlightPaymentId }: { detail: StudentDetail; role: Role; highlightPaymentId: string | null }) {
+export function StudentWorkspace({ detail, role, highlightPaymentId, aiOn = false }: { detail: StudentDetail; role: Role; highlightPaymentId: string | null; aiOn?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const [payOpen, setPayOpen] = useState(false);
   const [concessionOpen, setConcessionOpen] = useState(false);
+  const [messageOpen, setMessageOpen] = useState(false);
   const [reverseTarget, setReverseTarget] = useState<TransitionTarget | null>(null);
   const [failTarget, setFailTarget] = useState<TransitionTarget | null>(null);
   const refresh = () => router.refresh();
@@ -61,6 +63,7 @@ export function StudentWorkspace({ detail, role, highlightPaymentId }: { detail:
           {staff ? "Record payment" : "Pay online"}
         </Button>
       ) : null}
+      {aiOn && staff ? <ParentMessageButton onClick={() => setMessageOpen(true)} /> : null}
       {can(role, "concession.apply") ? (
         <Button variant="secondary" onClick={() => setConcessionOpen(true)}>
           <BadgePercent aria-hidden />
@@ -108,6 +111,7 @@ export function StudentWorkspace({ detail, role, highlightPaymentId }: { detail:
         suggestedPaise={suggested}
         onRecorded={onRecorded}
       />
+      {aiOn && staff ? <ParentMessageDrawer open={messageOpen} onOpenChange={setMessageOpen} detail={detail} /> : null}
       <ConcessionDrawer open={concessionOpen} onOpenChange={setConcessionOpen} student={detail.student} installments={detail.installments} onApplied={refresh} />
       <PaymentTransitionDrawer kind="reverse" payment={reverseTarget} onOpenChange={(o) => !o && setReverseTarget(null)} onDone={refresh} />
       <PaymentTransitionDrawer kind="fail" payment={failTarget} onOpenChange={(o) => !o && setFailTarget(null)} onDone={refresh} />

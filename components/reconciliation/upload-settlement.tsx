@@ -1,18 +1,24 @@
 "use client";
 
 // Drag-and-drop (or pick) a gateway settlement CSV. The server parses, validates, matches and
-// stores the run; we then open the run's result page.
+// stores the run; we then open the run's result page. A file in another layout goes through
+// smart import first (column mapping proposed by the AI, confirmed by the accountant).
 
 import { AlertCircle, Download, FileSpreadsheet, UploadCloud, X } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Papa from "papaparse";
 import { useRef, useState } from "react";
+import { SmartImport, type MappingNote } from "@/components/reconciliation/smart-import";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { missingColumns } from "@/lib/domain/reconcile";
 
 const MAX_BYTES = 1_000_000;
 
-export function UploadSettlement() {
+type Foreign = { headers: string[]; rows: Record<string, string | undefined>[] };
+
+export function UploadSettlement({ aiOn = false }: { aiOn?: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
@@ -20,23 +26,36 @@ export function UploadSettlement() {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [foreign, setForeign] = useState<Foreign | null>(null);
 
   function choose(f: File | undefined) {
     setError(null);
+    setForeign(null);
     if (!f) return;
     if (!/\.csv$/i.test(f.name)) return setError(`${f.name} is not a .csv file. Export the settlement report from the gateway as CSV.`);
     if (f.size > MAX_BYTES) return setError("The file is larger than 1 MB. Split it and upload each part.");
     if (f.size === 0) return setError("The file is empty.");
     setFile(f);
+    // Look at the header in the browser: a file in another layout goes to smart import.
+    void f.text().then((text) => {
+      const parsed = Papa.parse<Record<string, string>>(text.replace(/^﻿/, ""), { header: true, skipEmptyLines: false, transformHeader: (h) => h.trim() });
+      const headers = (parsed.meta.fields ?? []).filter(Boolean);
+      if (headers.length > 0 && missingColumns(headers).length > 0) setForeign({ headers, rows: parsed.data });
+    });
   }
 
-  async function upload() {
+  async function upload(converted?: { csv: string; note: MappingNote }) {
     if (!file || uploading) return;
     setUploading(true);
     setError(null);
     try {
       const form = new FormData();
-      form.append("file", file);
+      if (converted) {
+        form.append("file", new File([converted.csv], file.name.replace(/\.csv$/i, "") + ".csv", { type: "text/csv" }));
+        form.append("mapping", JSON.stringify(converted.note));
+      } else {
+        form.append("file", file);
+      }
       const res = await fetch("/api/reconciliation", { method: "POST", body: form });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.data) {
@@ -77,7 +96,9 @@ export function UploadSettlement() {
       >
         <UploadCloud className="size-6 text-muted" aria-hidden />
         <span className="mt-2 font-medium">Drop the settlement CSV here, or choose a file</span>
-        <span className="mt-1 text-sm text-muted">Columns: gateway_ref, amount_inr, status, settled_at. Up to 1 MB.</span>
+        <span className="mt-1 text-sm text-muted">
+          Columns: gateway_ref, amount_inr, status, settled_at. Up to 1 MB.{aiOn ? " Another layout? The import assistant will map it." : ""}
+        </span>
         <input
           ref={input}
           id="settlement-file"
@@ -91,7 +112,22 @@ export function UploadSettlement() {
         />
       </label>
 
-      {file ? (
+      {file && foreign ? (
+        <SmartImport
+          fileName={file.name}
+          headers={foreign.headers}
+          rows={foreign.rows}
+          aiOn={aiOn}
+          busy={uploading}
+          onCancel={() => {
+            setFile(null);
+            setForeign(null);
+          }}
+          onConfirm={(csv, note) => void upload({ csv, note })}
+        />
+      ) : null}
+
+      {file && !foreign ? (
         <div className="flex flex-wrap items-center gap-3 rounded border border-line px-3.5 py-2.5">
           <FileSpreadsheet className="size-4 text-muted" aria-hidden />
           <span className="min-w-0 flex-1 truncate font-medium">{file.name}</span>
@@ -99,7 +135,7 @@ export function UploadSettlement() {
           <button className="rounded p-1 text-muted hover:text-ink" onClick={() => setFile(null)} aria-label="Remove file" disabled={uploading}>
             <X className="size-4" />
           </button>
-          <Button onClick={upload} loading={uploading}>
+          <Button onClick={() => void upload()} loading={uploading}>
             {uploading ? "Reconciling" : "Run reconciliation"}
           </Button>
         </div>
@@ -112,10 +148,18 @@ export function UploadSettlement() {
         </div>
       ) : null}
 
-      <a href="/samples/settlement_sample.csv" download className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline">
-        <Download className="size-4" aria-hidden />
-        Download sample file
-      </a>
+      <div className="flex flex-wrap gap-x-5 gap-y-1">
+        <a href="/samples/settlement_sample.csv" download className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline">
+          <Download className="size-4" aria-hidden />
+          Download sample file
+        </a>
+        {aiOn ? (
+          <a href="/samples/gateway_report_sep_2026.csv" download className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline">
+            <Download className="size-4" aria-hidden />
+            Sample in a gateway&apos;s own layout
+          </a>
+        ) : null}
+      </div>
     </div>
   );
 }

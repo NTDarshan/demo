@@ -94,14 +94,14 @@ schema) and reapplies everything. The same reset is available in the app for adm
 | `npm run test:unit` / `test:integration` | One suite only |
 | `npm run e2e` | Playwright end-to-end smoke tests (starts `npm run dev` if nothing is running on port 3000) |
 | `npm run db:setup` / `db:reset` / `db:verify` | Apply migrations / drop and reapply / run [`scripts/verify-ledger.sql`](scripts/verify-ledger.sql) |
-| `npm run db:migrate` | Apply `004_ai.sql` to a database that already has 001 to 003 (idempotent) |
-| `npm run eval:ai` | Run the Reconciliation Copilot and Ask Kosha evaluations against OpenAI and the demo database (the Copilot eval resets demo data) |
+| `npm run db:migrate` | Apply the AI migrations (`004`, `005`) to a database that already has 001 to 003 (idempotent) |
+| `npm run eval:ai` | Run the AI evaluations (Copilot, Ask Kosha, smart import, parent messages) against OpenAI and the demo database (the Copilot eval resets demo data) |
 | `npm run db:sample` | Regenerate `public/samples/settlement_sample.csv` from freshly seeded data |
 | `npm run docs:pdf` | Capture fresh screenshots and build `docs/Kosha_Documentation.pdf` (needs the app running) |
 
 ## Tests
 
-- **Unit** (`tests/unit`, 165 tests): the AI verifiers (made-up figures, unknown evidence,
+- **Unit** (`tests/unit`, 181 tests): settlement-file mapping (dates, amounts, ambiguity, sampling), message checks in three languages, the AI verifiers (made-up figures, unknown evidence,
   forbidden actions, undisclosed duplicates), date periods for Ask Kosha, the file search and audit sentences; payment state machine (every legal and illegal transition,
   and a check that the TypeScript table matches the SQL one), reconciliation bucketing (duplicates,
   bad rows, amount formats, the settlement window, CSV edge cases), `toPaise`/`formatINR`/amount in
@@ -191,6 +191,51 @@ than 30 days?"*, *"How much did we collect last week compared with the week befo
 - **Eval:** `npm run eval:ai` also asks 8 questions whose answers are computed straight from the
   database views: counts, totals, the top debtor (with ties), last week's collections, pending
   payments, a two-turn follow-up and a refusal. Current result: 8/8.
+
+### Smart settlement import
+
+Upload a settlement report in a gateway's own layout (for example
+[`gateway_report_sep_2026.csv`](public/samples/gateway_report_sep_2026.csv), with DD/MM/YYYY 12-hour
+dates, gross/MDR/GST/net columns, a payout UTR and a transaction date next to the settlement date)
+and the import assistant maps it to Kosha's four columns.
+
+- **The AI chooses, code converts.** A LangGraph loop (propose → check) asks the model which column
+  is which, plus the amount unit, date format and status meanings. The deterministic converter in
+  [`lib/domain/settlement-mapping.ts`](lib/domain/settlement-mapping.ts) then runs on the sample. If
+  fewer than 90% of rows convert, the model retries once, told which formats actually parse.
+- **Minimal data leaves the browser.** Only the header and at most 25 sample rows are sent,
+  including every distinct status value.
+- **The accountant confirms.** The preview shows each choice with the AI's reason, editable
+  dropdowns, every status value, the result on the whole file ("37 of 37 rows convert cleanly"),
+  issues with line numbers and the first converted rows. Files where day and month cannot be
+  told apart need an explicit confirmation. A confirmed mapping can be remembered for files
+  with the same columns.
+- **The ledger rules do not change.** The converted file goes through the normal upload, and the
+  mapping is stored with the run and shown on its page for the audit trail.
+
+### Messages to parents
+
+On a student's page, **Message parent** drafts an upcoming-due reminder, an overdue notice, a
+balance explanation or a payment confirmation, in **English, Kannada or Hindi**, for WhatsApp or
+email.
+
+- Facts (amounts, dates, installments, receipts) are taken from the ledger in code
+  ([`facts.ts`](lib/ai/parent-message/facts.ts)); the model only writes the wording.
+- Checks ([`verify.ts`](lib/ai/parent-message/verify.ts)) confirm that:
+  - every amount is from the ledger and the key amount is present;
+  - amounts are written as ₹ figures with 0-9 digits;
+  - the message is in the chosen script;
+  - it has no assumed gender (Kosha does not record gender);
+  - a Kannada or Hindi draft includes an English version for staff;
+  - WhatsApp length and an email subject are right.
+
+  A failed check gets one rewrite. The same checks re-run in the browser on every edit, so a
+  wrong amount typed by a person is flagged too.
+- Kosha never sends anything: staff copy the message. Each draft is recorded in the audit log
+  through `log_message_draft()` ([`005_ai_messages.sql`](supabase/migrations/005_ai_messages.sql)).
+
+**Eval:** `npm run eval:ai` also maps two unfamiliar layouts with known right answers and drafts
+four messages (Kannada, Hindi and English, WhatsApp and email). Current result: 6/6.
 
 ## How it is built
 

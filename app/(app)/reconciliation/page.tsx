@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { UploadSettlement } from "@/components/reconciliation/upload-settlement";
+import { aiEnabled } from "@/lib/ai/config";
 import { EmptyState, PageHeader, Panel, PanelHeader } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ROLE_LABEL, isRole } from "@/lib/auth/permissions";
@@ -25,7 +26,7 @@ export default async function ReconciliationPage() {
         <Panel>
           <PanelHeader title="New run" />
           <div className="px-5 py-5">
-            <UploadSettlement />
+            <UploadSettlement aiOn={aiEnabled()} />
           </div>
         </Panel>
         <Panel>

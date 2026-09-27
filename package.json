@@ -16,7 +16,7 @@
     "db:setup": "node scripts/db-setup.ts setup",
     "db:reset": "node scripts/db-setup.ts reset",
     "db:verify": "node scripts/db-setup.ts verify",
-    "db:sample": "node scripts/make-settlement-sample.ts",
+    "db:sample": "node scripts/make-settlement-sample.ts && node scripts/make-gateway-report.ts",
     "test:unit": "vitest run tests/unit",
     "db:migrate": "node scripts/db-setup.ts migrate",
     "eval:ai": "vitest run --config vitest.eval.config.ts"

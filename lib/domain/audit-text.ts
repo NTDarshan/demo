@@ -77,6 +77,12 @@ export function describeAudit(row: AuditRow, studentName?: string | null): strin
       if (row.action === "ai.suggestion_accepted") return `${who} accepted the Copilot's suggestion on ${ref}: ${action}`;
       return `${who} dismissed the Copilot's suggestion on ${ref}${str(d.note) ? `: ${str(d.note)}` : ""}`;
     }
+    case "ai.message_drafted": {
+      const purpose = { REMINDER: "an upcoming-due reminder", OVERDUE: "an overdue notice", BALANCE: "a balance explanation", THANK_YOU: "a payment confirmation" }[str(d.purpose) ?? ""] ?? "a message";
+      const language = { en: "English", kn: "Kannada", hi: "Hindi" }[str(d.language) ?? ""] ?? "";
+      const channel = str(d.channel) === "email" ? "email" : "WhatsApp message";
+      return `${who} drafted ${purpose} (${[language, channel].filter(Boolean).join(" ")}) for the parent${studentName ? ` of ${studentName}` : ""}; not sent by Kosha`;
+    }
     case "demo.reset":
       return `${who} reset the demo data`;
     default:

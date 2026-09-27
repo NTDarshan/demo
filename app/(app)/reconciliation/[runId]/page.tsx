@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronLeft, Copy } from "lucide-react";
+import { ChevronLeft, Copy, Sparkles } from "lucide-react";
+import { Fragment } from "react";
 import { Money } from "@/components/money";
 import { CopilotBar } from "@/components/ai/copilot-bar";
 import { RunBuckets } from "@/components/reconciliation/run-buckets";
@@ -39,6 +40,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
   const ready = openItems.filter((i) => investigations[i.id]?.status === "PROPOSED");
   const needInvestigation = openItems.filter((i) => investigations[i.id]?.status !== "PROPOSED").map((i) => ({ id: i.id, gatewayRef: i.gatewayRef }));
   const t = run.totals;
+  const mapping = (t as typeof t & { mapping?: { source: string; confirmedBy: string; columns: Record<string, string> } }).mapping ?? null;
   const window = t.window;
 
   return (
@@ -63,6 +65,23 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
                 Open that run
               </Link>
             </p>
+          ) : null}
+          {mapping ? (
+            <details className="mt-2 self-start text-sm">
+              <summary className="inline-flex cursor-pointer items-center gap-1.5 rounded tint-accent px-2.5 py-1">
+                <Sparkles className="size-3.5" aria-hidden />
+                Converted from another layout with the import assistant; mapping {mapping.source === "edited" ? "edited and " : ""}confirmed by{" "}
+                {isRole(mapping.confirmedBy) ? ROLE_LABEL[mapping.confirmedBy] : mapping.confirmedBy}
+              </summary>
+              <dl className="mt-2 grid grid-cols-[110px_1fr] gap-x-3 gap-y-1 pl-1 text-muted">
+                {(["gateway_ref", "amount_inr", "status", "settled_at"] as const).filter((k) => mapping.columns[k]).map((k) => [k, mapping.columns[k]!] as const).map(([k, v]) => (
+                  <Fragment key={k}>
+                    <dt className="font-mono text-xs leading-5">{k}</dt>
+                    <dd>{v}</dd>
+                  </Fragment>
+                ))}
+              </dl>
+            </details>
           ) : null}
         </div>
         {/* Summary strip: dividers are the 1px gaps showing the line colour behind the cells. */}

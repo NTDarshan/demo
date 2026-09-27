@@ -115,7 +115,12 @@ export function makeAskTools(bag: EvidenceBag, today: string) {
         nameOrRoll: z.string().nullable().describe("Part of a name or roll number, e.g. 'Rohan' or 'CSE24'. Null for any."),
         course: z.enum(COURSES).nullable().describe("CSE (B.Tech CSE), BCA or BCOM (B.Com). Null for all."),
         year: z.number().int().min(1).max(5).nullable().describe("Year of study, 1 to 5. Null for all."),
-        status: z.enum(["OVERDUE", "DUE", "PAID", "ADVANCE"]).nullable().describe("OVERDUE: has unpaid dues past their due date. DUE: owes, nothing overdue. PAID: nothing owed. ADVANCE: paid more than owed."),
+        status: z
+          .enum(["OVERDUE", "DUE", "PAID", "ADVANCE"])
+          .nullable()
+          .describe(
+            "Leave null unless the user names a status. OVERDUE: has unpaid dues past their due date. DUE: owes, but nothing is overdue yet. PAID: nothing owed. ADVANCE: paid more than owed. Both OVERDUE and DUE students owe money, so for 'who owes', 'owes the most' or 'outstanding', use null and sortBy outstanding.",
+          ),
         minOutstandingRupees: z.number().nullable().describe("Only students owing at least this many rupees in total."),
         minOverdueRupees: z.number().nullable().describe("Only students with at least this many rupees overdue."),
         overdueForMoreThanDays: z.number().int().nullable().describe("Only students whose oldest overdue installment is more than this many days past due."),

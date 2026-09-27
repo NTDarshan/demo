@@ -6,6 +6,21 @@ import { requireRole } from "@/lib/auth/session";
 import { db, run, rpc } from "@/lib/data/db";
 import { getReconRun, listReconRuns, systemPaymentsForRecon } from "@/lib/data/reconciliation";
 import { MAX_FILE_BYTES, reconcileCsv } from "@/lib/domain/settlement-csv";
+import { z } from "zod";
+
+// When the file was converted from another layout (smart import), how its columns were mapped.
+// Stored with the run for the audit trail; the converted rows are still validated in full here.
+const mappingNote = z.object({
+  source: z.enum(["ai", "saved", "edited"]),
+  originalHeaders: z.array(z.string().max(120)).max(40),
+  columns: z.object({
+    gateway_ref: z.string().max(120),
+    amount_inr: z.string().max(160),
+    status: z.string().max(160),
+    settled_at: z.string().max(160),
+  }),
+  model: z.string().max(60).nullable(),
+});
 
 // GET /api/reconciliation  previous runs, newest first
 export const GET = handle(async () => {
@@ -21,6 +36,7 @@ export const POST = handle(async (req) => {
 
   let text: string;
   let fileName = "settlement.csv";
+  let mapping: z.infer<typeof mappingNote> | null = null;
   const contentType = req.headers.get("content-type") ?? "";
   if (contentType.includes("multipart/form-data")) {
     const form = await req.formData().catch(() => {
@@ -34,6 +50,18 @@ export const POST = handle(async (req) => {
     }
     fileName = file.name;
     text = await file.text();
+    const note = form.get("mapping");
+    if (typeof note === "string" && note) {
+      let json: unknown = null;
+      try {
+        json = note.length > 8000 ? null : JSON.parse(note);
+      } catch {
+        json = null;
+      }
+      const parsed = mappingNote.safeParse(json);
+      if (!parsed.success) throw new ApiError(422, "invalid_mapping", "The column mapping sent with the file is not valid.");
+      mapping = parsed.data;
+    }
   } else {
     text = await req.text();
     if (text.length > MAX_FILE_BYTES) throw new ApiError(413, "file_too_large", "The file is larger than 1 MB.");
@@ -53,7 +81,7 @@ export const POST = handle(async (req) => {
     p_file_name: fileName,
     p_actor: role,
     p_row_count: result.totals.rows,
-    p_totals: { ...result.totals, fileHash },
+    p_totals: { ...result.totals, fileHash, ...(mapping ? { mapping: { ...mapping, confirmedBy: role } } : {}) },
     p_rejected: result.rejected,
     p_items: result.items.map((i) => ({
       bucket: i.bucket,
