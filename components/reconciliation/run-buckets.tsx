@@ -3,16 +3,17 @@
 // The four buckets as tabs. Exception rows carry their resolve action; resolutions go through
 // resolve_recon_item() in the database (MARKED_PAID confirms the payment in the same transaction).
 
-import { AlertCircle, CheckCircle2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { CONFIDENCE_TONE, CopilotDrawer } from "@/components/ai/copilot-drawer";
 import { Money } from "@/components/money";
 import { Button } from "@/components/ui/button";
 import { FieldError, Label, Textarea } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/panel";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { MappedBadge, PAYMENT_TONE } from "@/components/ui/status-badge";
+import { MappedBadge, PAYMENT_TONE, StatusBadge } from "@/components/ui/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { ROLE_LABEL, isRole } from "@/lib/auth/permissions";
@@ -22,6 +23,8 @@ import type { ReconRunItem } from "@/lib/data/reconciliation";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { BUCKETS, BUCKET_LABEL, type Bucket, type BucketTotals } from "@/lib/domain/reconcile";
 import { formatINR } from "@/lib/money";
+import { ACTION_LABEL } from "@/lib/ai/recon-copilot/schema";
+import type { Investigation } from "@/lib/ai/recon-copilot/types";
 
 const BUCKET_HELP: Record<Bucket, string> = {
   MATCHED: "Reference, amount and status agree. Nothing to do.",
@@ -30,12 +33,23 @@ const BUCKET_HELP: Record<Bucket, string> = {
   MISSING_IN_SETTLEMENT: "We recorded these as paid, but they are not in the file for their settlement dates. Ask the gateway before doing anything.",
 };
 
-type Resolve = { item: ReconRunItem; resolution: "MARKED_PAID" | "REVIEWED" } | null;
+type Resolve = { item: ReconRunItem; resolution: "MARKED_PAID" | "REVIEWED"; note?: string } | null;
 
-export function RunBuckets({ items, buckets }: { items: ReconRunItem[]; buckets: Record<Bucket, BucketTotals> }) {
+export function RunBuckets({
+  items,
+  buckets,
+  investigations = {},
+  aiOn = false,
+}: {
+  items: ReconRunItem[];
+  buckets: Record<Bucket, BucketTotals>;
+  investigations?: Record<string, Investigation>;
+  aiOn?: boolean;
+}) {
   const firstOpen = BUCKETS.find((b) => b !== "MATCHED" && items.some((i) => i.bucket === b && !i.resolution));
   const [tab, setTab] = useState<Bucket>(firstOpen ?? "MATCHED");
   const [resolve, setResolve] = useState<Resolve>(null);
+  const [copilotFor, setCopilotFor] = useState<ReconRunItem | null>(null);
 
   return (
     <>
@@ -140,10 +154,16 @@ export function RunBuckets({ items, buckets }: { items: ReconRunItem[]; buckets:
                                     {i.resolution === "MARKED_PAID" ? "Marked as paid" : "Reviewed"} by {isRole(i.resolvedBy) ? ROLE_LABEL[i.resolvedBy] : i.resolvedBy}
                                     <span className="block text-muted">{i.resolvedAt ? formatDateTime(i.resolvedAt) : ""}</span>
                                     {i.resolutionNote ? <span className="block text-muted">{i.resolutionNote}</span> : null}
+                                    {investigations[i.id]?.status === "ACCEPTED" ? (
+                                      <button type="button" onClick={() => setCopilotFor(i)} className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent hover:underline">
+                                        <Sparkles className="size-3" aria-hidden /> Suggested by the Copilot
+                                      </button>
+                                    ) : null}
                                   </span>
                                 </span>
                               ) : (
-                                <span className="flex flex-wrap gap-2">
+                                <span className="flex flex-wrap items-center gap-2">
+                                  {aiOn ? <CopilotButton investigation={investigations[i.id] ?? null} onClick={() => setCopilotFor(i)} /> : null}
                                   {b === "SETTLED_PENDING_HERE" ? (
                                     <Button size="sm" onClick={() => setResolve({ item: i, resolution: "MARKED_PAID" })}>
                                       Mark as paid
@@ -167,6 +187,17 @@ export function RunBuckets({ items, buckets }: { items: ReconRunItem[]; buckets:
         })}
       </Tabs>
       <ResolveDrawer target={resolve} onClose={() => setResolve(null)} />
+      {aiOn ? (
+        <CopilotDrawer
+          item={copilotFor}
+          existing={copilotFor ? (investigations[copilotFor.id] ?? null) : null}
+          onClose={() => setCopilotFor(null)}
+          onResolveByHand={(item) => {
+            const inv = investigations[item.id];
+            setResolve({ item, resolution: "REVIEWED", note: inv?.diagnosis.recommendation.note });
+          }}
+        />
+      ) : null}
     </>
   );
 }
@@ -179,6 +210,9 @@ function ResolveDrawer({ target, onClose }: { target: Resolve; onClose: () => vo
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const markPaid = target?.resolution === "MARKED_PAID";
+  useEffect(() => {
+    if (target?.note) setNote(target.note);
+  }, [target]);
   const noteError = !markPaid && note.trim().length < 3 ? "Add a note saying what was checked, e.g. the gateway ticket number." : null;
 
   function close() {
@@ -274,5 +308,29 @@ function ResolveDrawer({ target, onClose }: { target: Resolve; onClose: () => vo
         </SheetContent>
       ) : null}
     </Sheet>
+  );
+}
+
+function CopilotButton({ investigation, onClick }: { investigation: Investigation | null; onClick: () => void }) {
+  if (investigation?.status === "PROPOSED") {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1.5 rounded border border-accent/30 bg-accent/5 px-2 py-1 text-left text-sm text-accent hover:bg-accent/10"
+        title="Open the Copilot's suggestion"
+      >
+        <Sparkles className="size-3.5 shrink-0" aria-hidden />
+        <span className="font-medium">{ACTION_LABEL[investigation.recommendation]}</span>
+        <StatusBadge tone={CONFIDENCE_TONE[investigation.confidence]} className="h-[18px] px-1.5">
+          {investigation.confidence}
+        </StatusBadge>
+      </button>
+    );
+  }
+  return (
+    <Button size="sm" variant="secondary" onClick={onClick} className="text-accent">
+      <Sparkles aria-hidden /> Investigate
+    </Button>
   );
 }

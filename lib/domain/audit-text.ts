@@ -5,6 +5,7 @@ import { ROLE_LABEL, isRole } from "@/lib/auth/permissions";
 import { formatINR } from "@/lib/money";
 import { BUCKET_LABEL, type Bucket } from "@/lib/domain/reconcile";
 import { MODE_LABEL, type PaymentMode } from "@/lib/domain/payment-state";
+import { ACTION_LABEL, type CopilotAction } from "@/lib/ai/recon-copilot/schema";
 
 export type AuditRow = {
   actor: string;
@@ -61,6 +62,20 @@ export function describeAudit(row: AuditRow, studentName?: string | null): strin
       const note = str(d.note) ? `: ${str(d.note)}` : "";
       if (d.resolution === "MARKED_PAID") return `${who} marked ${ref} as paid from reconciliation${note}`;
       return `${who} reviewed ${label} on ${ref}${note}`;
+    }
+    case "ai.investigated":
+    case "ai.suggestion_accepted":
+    case "ai.suggestion_dismissed": {
+      const bucket = str(d.bucket) as Bucket | null;
+      const label = bucket && bucket in BUCKET_LABEL ? BUCKET_LABEL[bucket].toLowerCase() : "an exception";
+      const rec = str(d.recommendation) as CopilotAction | null;
+      const action = rec && rec in ACTION_LABEL ? ACTION_LABEL[rec].toLowerCase() : "a resolution";
+      const ref = str(d.gateway_ref) ?? "";
+      if (row.action === "ai.investigated") {
+        return `${who} ran the Reconciliation Copilot on ${ref} (${label}); it suggested: ${action}${str(d.confidence) ? `, ${str(d.confidence)} confidence` : ""}`;
+      }
+      if (row.action === "ai.suggestion_accepted") return `${who} accepted the Copilot's suggestion on ${ref}: ${action}`;
+      return `${who} dismissed the Copilot's suggestion on ${ref}${str(d.note) ? `: ${str(d.note)}` : ""}`;
     }
     case "demo.reset":
       return `${who} reset the demo data`;

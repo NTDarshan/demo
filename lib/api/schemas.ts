@@ -55,6 +55,11 @@ export const resolveSchema = z.object({
   note: z.string().trim().max(500).nullish(),
 });
 
+export const decideSchema = z.object({
+  decision: z.enum(["ACCEPT", "DISMISS"]),
+  note: z.string().trim().max(300, "Keep the note under 300 characters.").nullish(),
+});
+
 export const STUDENT_STATUSES = ["OVERDUE", "DUE", "PAID", "ADVANCE"] as const;
 export type StudentStatus = (typeof STUDENT_STATUSES)[number];
 

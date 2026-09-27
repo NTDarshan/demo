@@ -170,3 +170,49 @@ This log is the source for the AI usage report in the documentation.
 - **How it was detected:** The results contradicted what the screen showed; re-checked with
   targeted locators.
 - **How it was fixed:** Filter alerts by text and wait for the dialog instead of checking once.
+
+## 15. Copilot findings cited the wrong evidence (AI-1)
+
+- **Generated:** The Copilot's `check_duplicate_payments`, `search_settlement_file` and
+  `find_ref_in_other_runs` tools in `lib/ai/recon-copilot/tools.ts` returned results without an
+  evidence id when they found nothing.
+- **What was wrong:** In the first live run, the model's finding "No duplicate payments of
+  ₹86,500 found" cited `item:MGW7300000005` (the exception itself), because the check it was
+  describing had no id to cite. It also wrote the student's internal uuid into the finding.
+- **How it was detected:** Reading the streamed output of the first investigation.
+- **How it was fixed:** Every check tool now registers a `check:*` evidence id even when it finds
+  nothing, and the prompt says a check that found nothing is still evidence. It also says never
+  to write internal ids.
+
+## 16. Settlement search reported 36 "similar rows" (AI-1)
+
+- **Generated:** `search_settlement_file` treated any gateway reference within edit distance 2
+  as similar.
+- **What was wrong:** Gateway references are sequential (`MGW7300000038`, `…039`), so almost every
+  row in the file was "similar" to every other. The tool's result was noise.
+- **How it was detected:** The live run on the missing-in-settlement item said "36 similar rows".
+- **How it was fixed:** A near-identical reference only counts together with the same amount
+  (`similarity()` in `lib/ai/recon-copilot/match.ts`, unit tested). The item's own row is skipped.
+
+## 17. The duplicate-risk check accepted "no duplicate" (AI-1)
+
+- **Generated:** In `verifyDiagnosis()`, the "Duplicate risk disclosed" check passed if any text
+  in the diagnosis matched `/duplicate|twice|again|retr/`.
+- **What was wrong:** A diagnosis saying "No duplicate payments found", the opposite of what the
+  tool found, matched the pattern and passed.
+- **How it was detected:** A unit test written for this check failed.
+- **How it was fixed:** The risk must now appear in `risks` or `nextSteps`.
+
+## 18. The double-payment eval passed while the Copilot missed the duplicate (AI-1)
+
+- **Generated:** `check_duplicate_payments` looked for a same-amount payment within 7 days; the
+  eval's double-payment case asserted that the diagnosis text matched `/duplicate|twice|again/`.
+- **What was wrong:** The staged counter payment was made 8 days after the stuck UPI payment, so
+  the tool found nothing and the Copilot recommended "mark as paid". The eval still reported the
+  test as passing, because its text match accepted "no duplicate" (the same mistake as entry 17).
+  Only the eval's summary table showed `pass: false`.
+- **How it was detected:** The summary table contradicted the test result.
+- **How it was fixed:** The tool now flags any same-amount payment made after the stuck one (or up
+  to 7 days before it). Each eval test asserts its own pass condition, and the double-payment
+  judge checks the root cause, the action and the verifier's check instead of words in the text.
+  Result: 4/4, with the double payment escalated as `POSSIBLE_DUPLICATE`.

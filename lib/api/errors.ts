@@ -48,6 +48,9 @@ const HINT_STATUS: Record<string, number> = {
   recon_item_matched: 409,
   append_only: 409,
   payment_immutable: 409,
+  invalid_decision: 422,
+  investigation_not_found: 404,
+  investigation_closed: 409,
 };
 
 // Which form field a validation error belongs to, so the UI can show it inline.

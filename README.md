@@ -63,7 +63,7 @@ support), a Supabase project (free tier is fine).
 
 ```bash
 npm install
-cp .env.example .env.local        # then fill in the four values below
+cp .env.example .env.local        # then fill in the values below
 npm run db:setup                  # creates tables, functions and demo data, then verifies the ledger
 npm run dev                       # http://localhost:3000
 ```
@@ -75,7 +75,10 @@ npm run dev                       # http://localhost:3000
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Project settings → Data API (`https://<ref>.supabase.co`) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Project settings → API keys → publishable (or legacy anon) key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Same page → secret (or legacy service_role) key. **Server-side only.** |
-| `DATABASE_URL` | *Connect* → connection string (direct or session pooler, port 5432). URL-encode special characters in the password (`@` → `%40`, `%` → `%25`). Used only by scripts. |
+| `DATABASE_URL` | *Connect* → connection string (direct or session pooler, port 5432). URL-encode special characters in the password (`@` → `%40`, `%` → `%25`). Used only by scripts. If the direct host (`db.<ref>.supabase.co`) does not resolve on your network (it is IPv6-only), use the session pooler. |
+| `OPENAI_API_KEY` | Optional: turns on the AI features. **Server-side only.** `OPENAI_MODEL` defaults to `gpt-4.1-mini`. |
+
+A database set up before the AI features existed only needs `npm run db:migrate`.
 
 `npm run db:reset` drops only Kosha's own tables, views and functions (never the whole `public`
 schema) and reapplies everything. The same reset is available in the app for admins.
@@ -91,12 +94,15 @@ schema) and reapplies everything. The same reset is available in the app for adm
 | `npm run test:unit` / `test:integration` | One suite only |
 | `npm run e2e` | Playwright end-to-end smoke tests (starts `npm run dev` if nothing is running on port 3000) |
 | `npm run db:setup` / `db:reset` / `db:verify` | Apply migrations / drop and reapply / run [`scripts/verify-ledger.sql`](scripts/verify-ledger.sql) |
+| `npm run db:migrate` | Apply `004_ai.sql` to a database that already has 001 to 003 (idempotent) |
+| `npm run eval:ai` | Run the Reconciliation Copilot evaluation against OpenAI and the demo database (resets demo data) |
 | `npm run db:sample` | Regenerate `public/samples/settlement_sample.csv` from freshly seeded data |
 | `npm run docs:pdf` | Capture fresh screenshots and build `docs/Kosha_Documentation.pdf` (needs the app running) |
 
 ## Tests
 
-- **Unit** (`tests/unit`, 143 tests): payment state machine (every legal and illegal transition,
+- **Unit** (`tests/unit`, 157 tests): the Copilot's verifier (made-up figures, unknown evidence,
+  forbidden actions, undisclosed duplicates), its file search and audit sentences; payment state machine (every legal and illegal transition,
   and a check that the TypeScript table matches the SQL one), reconciliation bucketing (duplicates,
   bad rows, amount formats, the settlement window, CSV edge cases), `toPaise`/`formatINR`/amount in
   words, allocation preview, statement builder, permission matrix, dates, error mapping.
@@ -109,6 +115,57 @@ schema) and reapplies everything. The same reset is available in the app for adm
   settlement file resolves it; an admin reverses a payment (an accountant cannot).
 - **Ledger verification** (`npm run db:verify`): nine invariants, including balance = SUM(ledger)
   for every student, allocations never exceed demand, and the ledger rejecting UPDATE and DELETE.
+
+## AI features
+
+Kosha has one rule for AI: **it never moves money.** Agents read and propose; a person decides,
+and the decision goes through the same locked, audited SQL functions as every other write.
+They use OpenAI through LangChain and LangGraph, on the server only (the key is read in route handlers, never in the browser).
+Without `OPENAI_API_KEY` the AI features are simply hidden.
+
+### Reconciliation Copilot
+
+On a reconciliation run, each open exception has an **Investigate** button, and **Investigate
+all** works through every open exception in turn. The Copilot:
+
+1. **Investigates** with read-only tools (a LangGraph agent loop, at most 5 rounds):
+   the gateway's own record, the payment's status history, the student's account, a search for a
+   second payment of the same amount, a search of the file for the same amount under a mistyped
+   reference, and other settlement files that contain the reference.
+2. **Diagnoses** with structured output: headline, root cause, confidence, findings that cite
+   evidence, a suggested action with a ready-to-save note and, when the gateway must be asked, a
+   drafted support message.
+3. **Verifies in code** before anyone sees it: every ₹ figure must be one the tools returned,
+   every cited evidence id must exist, the action must be allowed for the bucket and the
+   payment's current status, and a possible duplicate payment must be disclosed. On a failed
+   check the model gets one retry with the failures as feedback. If it still fails, the suggestion
+   becomes a low-confidence escalation.
+4. **Waits for a person.** Accept runs `decide_ai_investigation()`, which calls
+   `resolve_recon_item()` in the same transaction. Dismiss needs a reason. Escalations cannot be
+   accepted, only resolved by hand. Every step is in the audit log.
+
+```
+START → investigate ⇄ tools → diagnose → verify ─(failed once)→ diagnose
+                                            └──────────────────→ END (saved as a proposal)
+```
+
+Code: [`lib/ai/recon-copilot`](lib/ai/recon-copilot) (graph, tools, prompts, schema, verifier),
+[`supabase/migrations/004_ai.sql`](supabase/migrations/004_ai.sql) (`ai_investigations`,
+`save_ai_investigation`, `decide_ai_investigation`), the streaming route
+[`app/api/ai/recon-items/[id]/investigate`](app/api/ai/recon-items/[id]/investigate/route.ts) (NDJSON)
+and [`components/ai`](components/ai).
+
+**Evaluation:** `npm run eval:ai` resets the demo data, reconciles the sample file and runs
+the real model on each exception with a known right answer. It also stages a double payment (the
+parent pays again at the counter) through `record_payment()`. Current result with `gpt-4.1-mini`:
+4/4, about 6 to 8 seconds and 5,000 to 6,000 tokens per investigation.
+
+| Case | Expected | Result |
+|---|---|---|
+| Settled at the gateway, pending here | Mark as paid | Mark as paid: gateway confirmed after the timeout |
+| Settled ₹500 short | Never mark as paid | Escalate: settlement short, with a drafted message to the gateway |
+| Paid here, missing from the file | Never mark as paid | Escalate: searched the file and other runs |
+| Pending, and the parent paid again | Catch the duplicate | Escalate: possible duplicate payment |
 
 ## How it is built
 
