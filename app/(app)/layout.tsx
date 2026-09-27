@@ -1,12 +1,16 @@
+import { AskKoshaProvider } from "@/components/ai/ask-kosha";
 import { CommandPaletteProvider } from "@/components/shell/command-palette";
 import { Sidebar } from "@/components/shell/sidebar";
 import { Topbar } from "@/components/shell/topbar";
+import { aiEnabled } from "@/lib/ai/config";
+import { can } from "@/lib/auth/permissions";
 import { getRole } from "@/lib/auth/session";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const role = await getRole();
   return (
     <CommandPaletteProvider role={role}>
+      <AskKoshaProvider enabled={aiEnabled() && can(role, "dashboard.view")}>
       <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[70] focus:rounded focus:bg-surface focus:px-3 focus:py-2">
         Skip to content
       </a>
@@ -22,6 +26,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </main>
         </div>
       </div>
+      </AskKoshaProvider>
     </CommandPaletteProvider>
   );
 }

@@ -2,6 +2,7 @@
 
 import { Menu } from "lucide-react";
 import { useState } from "react";
+import { AskKoshaButton } from "@/components/ai/ask-kosha";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { can, type Role } from "@/lib/auth/permissions";
@@ -38,6 +39,7 @@ export function Topbar({ role }: { role: Role }) {
             <SearchIconTrigger />
           </span>
         ) : null}
+        <AskKoshaButton />
         <DemoGuide role={role} />
         <RoleSwitcher role={role} />
       </div>

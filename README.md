@@ -95,14 +95,14 @@ schema) and reapplies everything. The same reset is available in the app for adm
 | `npm run e2e` | Playwright end-to-end smoke tests (starts `npm run dev` if nothing is running on port 3000) |
 | `npm run db:setup` / `db:reset` / `db:verify` | Apply migrations / drop and reapply / run [`scripts/verify-ledger.sql`](scripts/verify-ledger.sql) |
 | `npm run db:migrate` | Apply `004_ai.sql` to a database that already has 001 to 003 (idempotent) |
-| `npm run eval:ai` | Run the Reconciliation Copilot evaluation against OpenAI and the demo database (resets demo data) |
+| `npm run eval:ai` | Run the Reconciliation Copilot and Ask Kosha evaluations against OpenAI and the demo database (the Copilot eval resets demo data) |
 | `npm run db:sample` | Regenerate `public/samples/settlement_sample.csv` from freshly seeded data |
 | `npm run docs:pdf` | Capture fresh screenshots and build `docs/Kosha_Documentation.pdf` (needs the app running) |
 
 ## Tests
 
-- **Unit** (`tests/unit`, 157 tests): the Copilot's verifier (made-up figures, unknown evidence,
-  forbidden actions, undisclosed duplicates), its file search and audit sentences; payment state machine (every legal and illegal transition,
+- **Unit** (`tests/unit`, 165 tests): the AI verifiers (made-up figures, unknown evidence,
+  forbidden actions, undisclosed duplicates), date periods for Ask Kosha, the file search and audit sentences; payment state machine (every legal and illegal transition,
   and a check that the TypeScript table matches the SQL one), reconciliation bucketing (duplicates,
   bad rows, amount formats, the settlement window, CSV edge cases), `toPaise`/`formatINR`/amount in
   words, allocation preview, statement builder, permission matrix, dates, error mapping.
@@ -166,6 +166,31 @@ parent pays again at the counter) through `record_payment()`. Current result wit
 | Settled ₹500 short | Never mark as paid | Escalate: settlement short, with a drafted message to the gateway |
 | Paid here, missing from the file | Never mark as paid | Escalate: searched the file and other runs |
 | Pending, and the parent paid again | Catch the duplicate | Escalate: possible duplicate payment |
+
+### Ask Kosha
+
+Plain-English questions about the college's fees, from a panel on every page (top bar, or
+Ctrl+J), with example questions on the dashboard. For example: *"Which BCA students are overdue by more
+than 30 days?"*, *"How much did we collect last week compared with the week before, by mode?"*,
+*"What falls due in the next 30 days?"*, then follow-ups like *"only the second years"*.
+
+- **No text-to-SQL.** A LangGraph agent chooses among six typed, read-only tools
+  ([`lib/ai/ask/tools.ts`](lib/ai/ask/tools.ts)): `search_students`, `get_student_account`,
+  `collections` (grouping and period comparison), `list_payments`, `fee_overview` and
+  `reconciliation_overview`. It cannot read anything else and cannot write.
+- **Arithmetic happens in code.** Totals, differences, percentages and ties are computed by the
+  tools, and relative dates ("last week") are resolved in code
+  ([`periods.ts`](lib/ai/ask/periods.ts)).
+- **Verified answers.** The answer is structured output: text, an optional table whose rows link
+  to students and payments, sources and follow-up questions. Every ₹ figure in it and every
+  reference is checked against the tool results. On a failure, the agent goes back to look up what
+  was missing; if it still fails, the answer is shown with a warning naming the unchecked
+  figures.
+- **Stateless follow-ups.** The browser sends the recent conversation with each question, so it
+  works on serverless hosting without a session store.
+- **Eval:** `npm run eval:ai` also asks 8 questions whose answers are computed straight from the
+  database views: counts, totals, the top debtor (with ties), last week's collections, pending
+  payments, a two-turn follow-up and a refusal. Current result: 8/8.
 
 ## How it is built
 

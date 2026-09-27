@@ -3,10 +3,9 @@
 
 import { ApiError } from "@/lib/api/errors";
 import { db, runSingle } from "@/lib/data/db";
-import { formatDateTime } from "@/lib/dates";
 import { BUCKET_LABEL, type Bucket, type RejectedRow } from "@/lib/domain/reconcile";
 import type { PaymentMode, PaymentStatus } from "@/lib/domain/payment-state";
-import { formatINR } from "@/lib/money";
+import { EvidenceBag, inr, when } from "@/lib/ai/evidence";
 
 export type CaseFile = {
   itemId: string;
@@ -81,51 +80,7 @@ export async function loadCaseFile(itemId: string): Promise<CaseFile> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Evidence
-// ---------------------------------------------------------------------------
-
-export type EvidenceKind = "item" | "payment" | "gateway" | "student" | "file" | "run" | "check";
-
-export type EvidenceItem = {
-  id: string;
-  kind: EvidenceKind;
-  label: string;
-  /** Link in the app, when there is a page for it. */
-  href: string | null;
-};
-
-/** Everything the tools returned, so the verifier can check what the model says against it. */
-export class EvidenceBag {
-  private readonly items = new Map<string, EvidenceItem>();
-  private readonly amounts = new Set<number>();
-  duplicateSuspected = false;
-
-  add(item: EvidenceItem, amountsPaise: (number | null | undefined)[] = []): string {
-    if (!this.items.has(item.id)) this.items.set(item.id, item);
-    for (const a of amountsPaise) this.addAmount(a);
-    return item.id;
-  }
-
-  addAmount(paise: number | null | undefined) {
-    if (typeof paise === "number" && Number.isSafeInteger(paise)) this.amounts.add(Math.abs(paise));
-  }
-
-  get ids(): ReadonlySet<string> {
-    return new Set(this.items.keys());
-  }
-
-  get knownAmounts(): ReadonlySet<number> {
-    return this.amounts;
-  }
-
-  list(): EvidenceItem[] {
-    return [...this.items.values()];
-  }
-}
-
-export const inr = (paise: number | null | undefined) => (paise === null || paise === undefined ? null : formatINR(paise, { paise: "auto" }));
-export const when = (iso: string | null | undefined) => (iso ? formatDateTime(iso) : null);
+export { EvidenceBag, inr, when, type EvidenceItem, type EvidenceKind } from "@/lib/ai/evidence";
 
 /** The case as the model first sees it. Registers the item itself as evidence. */
 export function caseBrief(c: CaseFile, bag: EvidenceBag): string {

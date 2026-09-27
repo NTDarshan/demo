@@ -216,3 +216,58 @@ This log is the source for the AI usage report in the documentation.
   to 7 days before it). Each eval test asserts its own pass condition, and the double-payment
   judge checks the root cause, the action and the verifier's check instead of words in the text.
   Result: 4/4, with the double payment escalated as `POSSIBLE_DUPLICATE`.
+
+## 19. LangGraph node named like a state field (AI-2)
+
+- **Generated:** Ask Kosha's graph in `lib/ai/ask/graph.ts` had a state field `answer` and a
+  node also called `"answer"`.
+- **What was wrong:** LangGraph refuses to compile a graph where a node and a state channel share
+  a name, so every question failed with "Ask Kosha could not answer that right now".
+- **How it was detected:** The first API call; the dev server log showed the LangGraph error.
+- **How it was fixed:** The node is now `compose`.
+
+## 20. "Last week" meant different weeks on the same day (AI-2)
+
+- **Generated:** The system prompt told the model to "resolve relative dates from today".
+- **What was wrong:** On Sunday 27 Sep 2026 the same question was answered once for 14 to 20 Sep
+  and once for 21 to 27 Sep (the week that includes today), with different totals.
+- **How it was detected:** Comparing the answer in a UI screenshot with an earlier API test.
+- **How it was fixed:** `lib/ai/ask/periods.ts` resolves today, yesterday, this week, last week,
+  the week before last, last 7 and 30 days, this month and last month in code, and the prompt
+  lists those exact ranges. Unit tested for Sundays, Mondays and month and year boundaries; the
+  eval checks last week's total against the database.
+
+## 21. Answers that failed a check could only be reworded (AI-2)
+
+- **Generated:** After a failed check, the graph sent the model back to the answer-writing step.
+- **What was wrong:** For the follow-up "How much is overdue for them in total?" the model added up
+  the previous answer's table itself. The verifier correctly flagged the total as not from the
+  data, but the retry could not call a tool, so the answer stayed unverified.
+- **How it was detected:** The Ask Kosha eval (7/8).
+- **How it was fixed:** A failed check now returns to the agent step with the failures as a
+  message, so it can look up the missing figure, and the prompt says earlier answers are
+  summaries, not data. The eval passes 8/8.
+
+## 22. Ties cut off, an unrequested filter and placeholder cells (AI-2)
+
+- **Generated:** `search_students` returned exactly `limit` rows; `collections` compared only
+  totals between periods.
+- **What was wrong:** "Which student owes the most?" named one student when three owe the same
+  ₹1,73,000, and the model had also added an "overdue only" filter nobody asked for. For "last
+  week compared with the week before, by mode", the model filled the previous week's columns with
+  "(see note)" because the tool had no per-mode figures for that week.
+- **How it was detected:** A flaky eval case, then reading the answer; a UI screenshot for the
+  placeholders.
+- **How it was fixed:** The search never cuts a tie in half. `collections` returns a per-group
+  comparison for mode, course and year. The prompt forbids unrequested filters and placeholder
+  cells.
+
+## 23. The user's own figure counted as unverified (AI-2)
+
+- **Generated:** The Ask verifier accepted only amounts returned by tools.
+- **What was wrong:** "Which students owe more than ₹1,00,000?" was flagged because the answer
+  repeated the ₹1,00,000 from the question. A refusal ("I cannot record the ₹5,000 payment") was
+  flagged as a money answer given without a lookup.
+- **How it was detected:** The first API tests.
+- **How it was fixed:** Figures typed by the user are known amounts, and the "looked up" check
+  ignores them. Both cases are unit tested.
