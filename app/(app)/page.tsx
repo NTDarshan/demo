@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
+import { AskKoshaSuggestions } from "@/components/ai/ask-kosha";
 import { CollectionsTrend } from "@/components/dashboard/collections-trend";
 import { OverdueByCourse } from "@/components/dashboard/overdue-by-course";
 import { Money } from "@/components/money";
@@ -49,6 +50,8 @@ export default async function DashboardPage() {
           </Link>
         ))}
       </section>
+
+      <AskKoshaSuggestions className="mt-5" />
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <Panel>

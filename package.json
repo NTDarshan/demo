@@ -16,12 +16,17 @@
     "db:setup": "node scripts/db-setup.ts setup",
     "db:reset": "node scripts/db-setup.ts reset",
     "db:verify": "node scripts/db-setup.ts verify",
-    "db:sample": "node scripts/make-settlement-sample.ts",
-    "test:unit": "vitest run tests/unit"
+    "db:sample": "node scripts/make-settlement-sample.ts && node scripts/make-gateway-report.ts",
+    "test:unit": "vitest run tests/unit",
+    "db:migrate": "node scripts/db-setup.ts migrate",
+    "eval:ai": "vitest run --config vitest.eval.config.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@langchain/core": "^1.2.13",
+    "@langchain/langgraph": "^1.4.18",
+    "@langchain/openai": "^1.6.0",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-dropdown-menu": "^2.1.24",
     "@radix-ui/react-slot": "^1.3.3",

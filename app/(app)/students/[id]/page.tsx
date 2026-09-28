@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { StudentWorkspace } from "@/components/statement/student-workspace";
+import { aiEnabled } from "@/lib/ai/config";
 import { ApiError } from "@/lib/api/errors";
 import { can } from "@/lib/auth/permissions";
 import { getRole } from "@/lib/auth/session";
@@ -46,7 +47,7 @@ export default async function StudentPage({ params, searchParams }: Params) {
           Students
         </Link>
       ) : null}
-      <StudentWorkspace detail={detail} role={role} highlightPaymentId={highlight} />
+      <StudentWorkspace detail={detail} role={role} highlightPaymentId={highlight} aiOn={aiEnabled()} />
     </div>
   );
 }

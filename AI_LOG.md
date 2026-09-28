@@ -170,3 +170,170 @@ This log is the source for the AI usage report in the documentation.
 - **How it was detected:** The results contradicted what the screen showed; re-checked with
   targeted locators.
 - **How it was fixed:** Filter alerts by text and wait for the dialog instead of checking once.
+
+## 15. Copilot findings cited the wrong evidence (AI-1)
+
+- **Generated:** The Copilot's `check_duplicate_payments`, `search_settlement_file` and
+  `find_ref_in_other_runs` tools in `lib/ai/recon-copilot/tools.ts` returned results without an
+  evidence id when they found nothing.
+- **What was wrong:** In the first live run, the model's finding "No duplicate payments of
+  ₹86,500 found" cited `item:MGW7300000005` (the exception itself), because the check it was
+  describing had no id to cite. It also wrote the student's internal uuid into the finding.
+- **How it was detected:** Reading the streamed output of the first investigation.
+- **How it was fixed:** Every check tool now registers a `check:*` evidence id even when it finds
+  nothing, and the prompt says a check that found nothing is still evidence. It also says never
+  to write internal ids.
+
+## 16. Settlement search reported 36 "similar rows" (AI-1)
+
+- **Generated:** `search_settlement_file` treated any gateway reference within edit distance 2
+  as similar.
+- **What was wrong:** Gateway references are sequential (`MGW7300000038`, `…039`), so almost every
+  row in the file was "similar" to every other. The tool's result was noise.
+- **How it was detected:** The live run on the missing-in-settlement item said "36 similar rows".
+- **How it was fixed:** A near-identical reference only counts together with the same amount
+  (`similarity()` in `lib/ai/recon-copilot/match.ts`, unit tested). The item's own row is skipped.
+
+## 17. The duplicate-risk check accepted "no duplicate" (AI-1)
+
+- **Generated:** In `verifyDiagnosis()`, the "Duplicate risk disclosed" check passed if any text
+  in the diagnosis matched `/duplicate|twice|again|retr/`.
+- **What was wrong:** A diagnosis saying "No duplicate payments found", the opposite of what the
+  tool found, matched the pattern and passed.
+- **How it was detected:** A unit test written for this check failed.
+- **How it was fixed:** The risk must now appear in `risks` or `nextSteps`.
+
+## 18. The double-payment eval passed while the Copilot missed the duplicate (AI-1)
+
+- **Generated:** `check_duplicate_payments` looked for a same-amount payment within 7 days; the
+  eval's double-payment case asserted that the diagnosis text matched `/duplicate|twice|again/`.
+- **What was wrong:** The staged counter payment was made 8 days after the stuck UPI payment, so
+  the tool found nothing and the Copilot recommended "mark as paid". The eval still reported the
+  test as passing, because its text match accepted "no duplicate" (the same mistake as entry 17).
+  Only the eval's summary table showed `pass: false`.
+- **How it was detected:** The summary table contradicted the test result.
+- **How it was fixed:** The tool now flags any same-amount payment made after the stuck one (or up
+  to 7 days before it). Each eval test asserts its own pass condition, and the double-payment
+  judge checks the root cause, the action and the verifier's check instead of words in the text.
+  Result: 4/4, with the double payment escalated as `POSSIBLE_DUPLICATE`.
+
+## 19. LangGraph node named like a state field (AI-2)
+
+- **Generated:** Ask Kosha's graph in `lib/ai/ask/graph.ts` had a state field `answer` and a
+  node also called `"answer"`.
+- **What was wrong:** LangGraph refuses to compile a graph where a node and a state channel share
+  a name, so every question failed with "Ask Kosha could not answer that right now".
+- **How it was detected:** The first API call; the dev server log showed the LangGraph error.
+- **How it was fixed:** The node is now `compose`.
+
+## 20. "Last week" meant different weeks on the same day (AI-2)
+
+- **Generated:** The system prompt told the model to "resolve relative dates from today".
+- **What was wrong:** On Sunday 27 Sep 2026 the same question was answered once for 14 to 20 Sep
+  and once for 21 to 27 Sep (the week that includes today), with different totals.
+- **How it was detected:** Comparing the answer in a UI screenshot with an earlier API test.
+- **How it was fixed:** `lib/ai/ask/periods.ts` resolves today, yesterday, this week, last week,
+  the week before last, last 7 and 30 days, this month and last month in code, and the prompt
+  lists those exact ranges. Unit tested for Sundays, Mondays and month and year boundaries; the
+  eval checks last week's total against the database.
+
+## 21. Answers that failed a check could only be reworded (AI-2)
+
+- **Generated:** After a failed check, the graph sent the model back to the answer-writing step.
+- **What was wrong:** For the follow-up "How much is overdue for them in total?" the model added up
+  the previous answer's table itself. The verifier correctly flagged the total as not from the
+  data, but the retry could not call a tool, so the answer stayed unverified.
+- **How it was detected:** The Ask Kosha eval (7/8).
+- **How it was fixed:** A failed check now returns to the agent step with the failures as a
+  message, so it can look up the missing figure, and the prompt says earlier answers are
+  summaries, not data. The eval passes 8/8.
+
+## 22. Ties cut off, an unrequested filter and placeholder cells (AI-2)
+
+- **Generated:** `search_students` returned exactly `limit` rows; `collections` compared only
+  totals between periods.
+- **What was wrong:** "Which student owes the most?" named one student when three owe the same
+  ₹1,73,000, and the model had also added an "overdue only" filter nobody asked for. For "last
+  week compared with the week before, by mode", the model filled the previous week's columns with
+  "(see note)" because the tool had no per-mode figures for that week.
+- **How it was detected:** A flaky eval case, then reading the answer; a UI screenshot for the
+  placeholders.
+- **How it was fixed:** The search never cuts a tie in half. `collections` returns a per-group
+  comparison for mode, course and year. The prompt forbids unrequested filters and placeholder
+  cells.
+
+## 23. The user's own figure counted as unverified (AI-2)
+
+- **Generated:** The Ask verifier accepted only amounts returned by tools.
+- **What was wrong:** "Which students owe more than ₹1,00,000?" was flagged because the answer
+  repeated the ₹1,00,000 from the question. A refusal ("I cannot record the ₹5,000 payment") was
+  flagged as a money answer given without a lookup.
+- **How it was detected:** The first API tests.
+- **How it was fixed:** Figures typed by the user are known amounts, and the "looked up" check
+  ignores them. Both cases are unit tested.
+
+## 24. The sample sent to the import assistant missed the one failed row (AI-3)
+
+- **Generated:** Smart import sent the first 15 rows plus 10 spread across the file.
+- **What was wrong:** The gateway report's only "Failed" row is its last line. It was not in the
+  sample, so the proposed mapping covered only "Captured", and the full file would have had an
+  unmapped status.
+- **How it was detected:** Reading the first proposal from the mapping API.
+- **How it was fixed:** `sampleRows()` now includes at least one row for every distinct value of
+  each category-like column (12 values or fewer), and the preview lists every status value in the
+  whole file with a dropdown, blocking reconciliation until each one is mapped. Unit tested.
+
+## 25. Same LangGraph node-name clash again (AI-3)
+
+- **Generated:** The parent-message graph had a state field `draft` and a node `"draft"`.
+- **What was wrong:** The same mistake as entry 19, repeated in new code: every draft failed with
+  an internal error.
+- **How it was detected:** The first API call; the dev server log.
+- **How it was fixed:** The node is now `write`. Every graph in `lib/ai` was checked for the same
+  clash.
+
+## 26. Drafted messages guessed the student's gender (AI-3)
+
+- **Generated:** The first parent-message prompt said nothing about gender.
+- **What was wrong:** The model wrote "your daughter Sneha Iyer" and, in Hindi, "आपके पुत्र"
+  ("your son") for Rohan Kulkarni. Kosha does not record gender, so these were guesses from the
+  names.
+- **How it was detected:** Reading the English and Hindi drafts from the API.
+- **How it was fixed:** The prompt says to use "your ward" or the student's name, and never
+  son/daughter or he/she in any of the three languages. `verifyMessage()` now fails a draft
+  containing gendered words in English, Kannada or Hindi, including a draft a person has edited.
+  Unit tested.
+
+## 27. A wrong day/month choice would convert without errors (AI-3)
+
+- **Generated:** Smart import trusted "every row converts" as the sign of a correct date format.
+- **What was wrong:** With MM/DD/YYYY picked for a DD/MM/YYYY file, 10/08/2026 still converts, as 8
+  October. Only dates with a day above 12 fail, so a file from the first 12 days of a month would
+  reconcile with wrong dates and no warning.
+- **How it was detected:** A unit test expected the first failure on line 2 and got line 4.
+- **How it was fixed:** `dateFormatAmbiguous()` detects when every date reads both ways. The
+  preview then requires the accountant to tick a box confirming the format before reconciling.
+
+## 28. The import assistant chose YYYY/MM/DD for dashed dates, twice (AI-3)
+
+- **Generated:** The date-format choices were bare names (`ISO`, `YYYY/MM/DD`, ...), and the retry
+  feedback listed the failing values.
+- **What was wrong:** For `2026-08-10` the model chose `YYYY/MM/DD` (slashes). After the failed check
+  it chose it again, so 0 of 36 rows converted.
+- **How it was detected:** The AI-3 eval (5/6).
+- **How it was fixed:** The schema describes each format with an example, and the retry feedback
+  lists the formats the parser found to read every value. The eval passes 6/6 twice in a row.
+
+## 29. "Who owes the most?" answered from the wrong group, with correct figures (AI-2, found in AI-3)
+
+- **Generated:** `search_students` described its `status` filter as "DUE: owes, nothing overdue".
+- **What was wrong:** For "Which student owes the most?" the model kept adding `status: DUE` or
+  `status: OVERDUE`. Once it answered ₹1,12,500 (the top of the DUE students only) when three
+  students owe ₹1,73,000. Every figure was real, so the verifier passed it: the verifier catches
+  made-up numbers, not a wrong filter.
+- **How it was detected:** The full `npm run eval:ai` run (Ask Kosha 7/8), then asking the
+  question three times: two runs used OVERDUE and one used DUE.
+- **How it was fixed:** The filter's description says to leave it null unless the user names a
+  status, because both OVERDUE and DUE students owe money. Five runs in a row used no filter,
+  and the eval passes 8/8 twice. This is why the evals check answers against the database
+  independently, not just the verifier.

@@ -3,6 +3,7 @@
 //   npm run db:setup   apply 001, 002, 003 to an empty database
 //   npm run db:reset   drop Kosha's objects, then apply 001, 002, 003
 //   npm run db:verify  run scripts/verify-ledger.sql
+//   npm run db:migrate apply the AI migrations (004, 005) to a database that already has 001-003 (idempotent)
 //
 // Reads DATABASE_URL from .env.local (or the environment). Each command runs in a single
 // transaction, so a failure leaves the database as it was.
@@ -16,12 +17,13 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const migrations = ["001_schema.sql", "002_functions.sql", "003_seed.sql"].map((f) =>
+const migrations = ["001_schema.sql", "002_functions.sql", "003_seed.sql", "004_ai.sql", "005_ai_messages.sql"].map((f) =>
   join(root, "supabase", "migrations", f),
 );
 
 const KOSHA_VIEWS = ["v_student_balances", "v_installment_status"];
 const KOSHA_TABLES = [
+  "ai_investigations",
   "reconciliation_items",
   "reconciliation_runs",
   "audit_log",
@@ -45,6 +47,7 @@ const KOSHA_FUNCTIONS = [
   "record_payment", "confirm_payment", "fail_payment", "reverse_payment", "apply_concession",
   "create_recon_run", "resolve_recon_item", "reset_demo",
   "_seed_clock", "_ist", "_seed_term_due", "_seed_pay", "seed_demo",
+  "save_ai_investigation", "decide_ai_investigation", "log_message_draft",
 ];
 
 function loadEnv(): string {
@@ -83,8 +86,8 @@ function dropSql(): string {
 
 async function main() {
   const command = process.argv[2];
-  if (!command || !["setup", "reset", "verify"].includes(command)) {
-    console.error("Usage: node scripts/db-setup.ts <setup|reset|verify>");
+  if (!command || !["setup", "reset", "verify", "migrate"].includes(command)) {
+    console.error("Usage: node scripts/db-setup.ts <setup|reset|verify|migrate>");
     process.exit(1);
   }
 
@@ -113,6 +116,13 @@ async function main() {
 
     if (command === "setup" || command === "reset") {
       for (const file of migrations) {
+        console.log(`Applying ${file.split(/[\\/]/).pop()}...`);
+        await client.query(readFileSync(file, "utf8"));
+      }
+    }
+
+    if (command === "migrate") {
+      for (const file of migrations.slice(3)) {
         console.log(`Applying ${file.split(/[\\/]/).pop()}...`);
         await client.query(readFileSync(file, "utf8"));
       }
