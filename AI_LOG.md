@@ -337,3 +337,14 @@ This log is the source for the AI usage report in the documentation.
   status, because both OVERDUE and DUE students owe money. Five runs in a row used no filter,
   and the eval passes 8/8 twice. This is why the evals check answers against the database
   independently, not just the verifier.
+
+## 30. The first briefs used alarmist wording (AI-4)
+
+- **Generated:** The first prompt for the daily brief asked for "why it matters" without guidance
+  on tone.
+- **What was wrong:** The model wrote "to secure ₹2,49,000 and ₹8,81,000 today" and "risking
+  significant revenue loss". The figures were right (the checks passed), but the tone was wrong for
+  an accounts office and overstated the risk: overdue fees are not lost revenue.
+- **How it was detected:** Reading the first brief on the dashboard.
+- **How it was fixed:** The prompt asks for a calm, plain tone and names the phrases to avoid. The
+  eval's quiet-day case checks that the brief does not invent urgency.

@@ -1,0 +1,293 @@
+/* Kosha documentation, print styles. Pure white pages, ink text, one accent used sparingly,
+   thin rules. Serif for titles and section headings, sans for body, mono for code. */
+
+:root {
+  --ink: #16213a;
+  --muted: #5b6478;
+  --line: #e3e6ec;
+  --tint: #f5f6f8;
+  --accent: #2754c5;
+  --highlight: #fff4d6;
+}
+
+@page {
+  size: A4;
+  margin: 22mm;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: "IBM Plex Sans", Arial, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.5;
+  color: var(--ink);
+  background: #fff;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-weight: 600;
+  line-height: 1.25;
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+h2 {
+  font-size: 19pt;
+  margin: 0 0 10pt;
+}
+h3 {
+  font-size: 12.5pt;
+  margin: 16pt 0 5pt;
+}
+h2 + p,
+h3 + p {
+  margin-top: 0;
+}
+
+p,
+li {
+  max-width: 158mm; /* keeps lines under ~80 characters at 10.5pt */
+}
+p {
+  margin: 0 0 7pt;
+}
+ul,
+ol {
+  margin: 0 0 8pt;
+  padding-left: 16pt;
+}
+li {
+  margin-bottom: 3pt;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+code,
+.mono {
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 9pt;
+}
+code {
+  background: var(--tint);
+  padding: 0 2pt;
+  border-radius: 2pt;
+}
+
+/* Each major section starts on a new page. */
+section.major {
+  break-before: page;
+  page-break-before: always;
+}
+
+/* ---------- Cover ---------- */
+.cover {
+  height: 250mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.cover .eyebrow {
+  color: var(--muted);
+  font-size: 10.5pt;
+  margin-bottom: 34mm;
+}
+.cover .toc h3 { margin: 0 0 4pt; }
+.cover .toc li { padding: 3pt 0; font-size: 10pt; }
+.cover h1 {
+  font-size: 40pt;
+  margin: 0 0 6pt;
+  letter-spacing: -0.01em;
+}
+.cover .subtitle {
+  font-size: 14pt;
+  color: var(--muted);
+  max-width: 130mm;
+}
+.cover .rule {
+  border-top: 1.5pt solid var(--ink);
+  width: 40mm;
+  margin: 10mm 0 0;
+}
+.cover dl {
+  display: grid;
+  grid-template-columns: 34mm 1fr;
+  gap: 4pt 0;
+  margin: 0;
+}
+.cover dt {
+  color: var(--muted);
+}
+.cover dd {
+  margin: 0;
+}
+
+/* ---------- Table of contents ---------- */
+.toc ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: toc;
+}
+.toc li {
+  counter-increment: toc;
+  display: flex;
+  align-items: baseline;
+  gap: 6pt;
+  padding: 5pt 0;
+  border-bottom: 0.5pt solid var(--line);
+  max-width: none;
+  margin: 0;
+}
+.toc li::before {
+  content: counter(toc) ".";
+  width: 16pt;
+  color: var(--muted);
+}
+.toc a {
+  color: var(--ink);
+  flex: 1;
+}
+.toc .note {
+  color: var(--muted);
+  font-size: 9pt;
+}
+
+/* ---------- Tables ---------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6pt 0 4pt;
+  font-size: 9.2pt;
+  line-height: 1.4;
+  break-inside: auto;
+}
+thead {
+  display: table-header-group;
+}
+tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+th {
+  background: var(--tint);
+  text-align: left;
+  font-weight: 600;
+  padding: 5pt 6pt;
+  border-bottom: 0.5pt solid var(--line);
+}
+td {
+  padding: 5pt 6pt;
+  border-bottom: 0.5pt solid var(--line);
+  vertical-align: top;
+}
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Figures ---------- */
+figure {
+  margin: 6pt 0 10pt;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+figure img {
+  display: block;
+  width: 100%;
+  border: 0.5pt solid var(--line);
+}
+figure.shot-tall img {
+  max-height: 190mm;
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto;
+}
+figcaption {
+  color: var(--muted);
+  font-size: 9pt;
+  margin-top: 5pt;
+}
+figcaption b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Mermaid diagrams: scale to the text width, never clip. */
+pre.mermaid {
+  margin: 0;
+  text-align: center;
+  background: #fff;
+}
+pre.mermaid svg {
+  max-width: 100% !important;
+  height: auto;
+}
+/* Height caps keep each diagram and screenshot on its page; width follows the aspect ratio. */
+.cap-62 svg, .cap-62 img { max-height: 62mm; }
+.cap-68 svg, .cap-68 img { max-height: 68mm; }
+.cap-75 svg, .cap-75 img { max-height: 75mm; }
+.cap-80 svg, .cap-80 img { max-height: 80mm; }
+.cap-85 svg, .cap-85 img { max-height: 85mm; }
+.cap-90 svg, .cap-90 img { max-height: 90mm; }
+.cap-95 svg, .cap-95 img { max-height: 95mm; }
+.cap-105 svg, .cap-105 img { max-height: 105mm; }
+.cap-115 svg, .cap-115 img { max-height: 115mm; }
+.cap-135 svg, .cap-135 img { max-height: 135mm; }
+.cap-150 svg, .cap-150 img { max-height: 140mm; }
+.cap-100 svg, .cap-100 img { max-height: 100mm; }
+.cap-110 svg, .cap-110 img { max-height: 110mm; }
+.cap-120 svg, .cap-120 img { max-height: 120mm; }
+.cap-125 svg, .cap-125 img { max-height: 125mm; }
+.cap-215 svg, .cap-215 img { max-height: 215mm; }
+figure.shot img { width: auto; max-width: 100%; margin: 0 auto; }
+
+/* ---------- Callouts ---------- */
+.lead {
+  font-size: 11.5pt;
+}
+.keypoints {
+  border-left: 2pt solid var(--accent);
+  padding: 2pt 0 2pt 10pt;
+  margin: 8pt 0 10pt;
+}
+.placeholder {
+  background: var(--highlight);
+  border: 0.5pt dashed #c7a24a;
+  padding: 0 3pt;
+  border-radius: 2pt;
+  font-style: italic;
+}
+.small {
+  font-size: 9pt;
+  color: var(--muted);
+}
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10mm;
+}
+.avoid-break {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+/* The AI report table is long; set it a size smaller. */
+#ai table { font-size: 8.6pt; }
+#ai td { padding: 3.5pt 5pt; }
+.cap-195 svg, .cap-195 img { max-height: 195mm; }

@@ -1,0 +1,920 @@
+<!doctype html>
+<html lang="en-IN">
+<head>
+<meta charset="utf-8">
+<title>Kosha: Fee Collection &amp; Reconciliation</title>
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-sans/400.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-sans/600.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-serif/600.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/400.css">
+<link rel="stylesheet" href="print.css">
+</head>
+<body>
+
+<!-- ============================ Cover ============================ -->
+<div class="cover">
+  <div>
+    <p class="eyebrow">Assignment 2: Fee Collection &amp; Reconciliation · Edumerge Solutions</p>
+    <h1>Kosha</h1>
+    <p class="subtitle">A fee ledger for an Indian college: payments, a mock payment gateway, receipts, concessions, reversals and gateway settlement reconciliation, on an append-only ledger. With five AI assistants built on LangChain and LangGraph, none of which can move money.</p>
+    <div class="rule"></div>
+  </div>
+  <nav class="toc">
+    <h3>Contents</h3>
+  <ol>
+    <li><a href="#summary">Summary</a></li>
+    <li><a href="#problem">Problem understanding</a></li>
+    <li><a href="#assumptions">Assumptions</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#data-model">Data model</a></li>
+    <li><a href="#lifecycle">Payment lifecycle</a></li>
+    <li><a href="#reconciliation">Reconciliation</a></li>
+    <li><a href="#decisions">Engineering decisions and trade-offs</a></li>
+    <li><a href="#edge-cases">Edge cases and how each is handled</a></li>
+    <li><a href="#testing">Validation and testing</a></li>
+    <li><a href="#walkthrough">Product walkthrough</a></li>
+    <li><a href="#ai-features">AI features</a></li>
+    <li><a href="#future">Limitations and future work</a></li>
+    <li><a href="#ai">AI usage report</a></li>
+  </ol>
+  <p class="small" style="margin-top:14pt">Figures and tables are numbered. Amounts are in Indian rupees (₹), dates and times in IST. Every figure quoted from the system comes from the demo seed described in section 3.</p>
+
+  </nav>
+  <dl>
+    <dt>Candidate</dt><dd>Darshan</dd>
+    <dt>Date</dt><dd>29 September 2026 (AI features added; first edition 24 September)</dd>
+    <dt>Live demo</dt><dd><span class="placeholder">[Darshan: Vercel URL]</span></dd>
+    <dt>Repository</dt><dd><a href="https://github.com/NTDarshan/demo">github.com/NTDarshan/demo</a></dd>
+  </dl>
+</div>
+
+<!-- ============================ 1. Summary ============================ -->
+<section class="major" id="summary">
+  <h2>1. Summary</h2>
+  <p class="lead">Colleges collect fees through several channels at once: a cash counter, bank transfers, and online payments through a gateway that sometimes answers late or not at all. The hard part is not taking the money; it is being able to say, for any student on any day, exactly what they owe, what they paid, and where each rupee went, and proving it against the bank.</p>
+  <p>Kosha is a fee ledger that does that. An accountant opens a student's statement, records a payment and sees before submitting which installments it will clear. Online payments go through a mock gateway that can succeed, fail or time out. Every successful payment gets a sequential receipt. A daily settlement file from the gateway is uploaded and matched against what was recorded, and every mismatch has a resolution with a name and a note against it. Admins can apply concessions and reverse payments; nothing is ever edited or deleted.</p>
+
+  <h3>The three decisions that matter most</h3>
+  <div class="keypoints">
+    <p><b>An append-only ledger.</b> Balances are the sum of ledger entries: demand, concession, payment and reversal. Database triggers reject UPDATE and DELETE on the ledger and on payment allocations. A reversal is a new positive entry, so the history of every account can always be read back, and a reversed payment reopens its installments without deleting anything.</p>
+    <p><b>Money rules live in the database, in one transaction.</b> Each money-changing operation is a single PostgreSQL function that locks the student row, checks the rules, writes the payment, events, ledger entry, allocations, receipt number and audit line together, or nothing at all. Constraints and triggers enforce the same rules even if the API is bypassed. Idempotency keys stop double submits.</p>
+    <p><b>Reconciliation is a first-class flow, not a report.</b> The gateway file is parsed and validated, matched by a pure, unit-tested function into four buckets, stored as a run, and each exception is resolved through a database function that records who resolved it and why. "Mark as paid" confirms the pending payment in the same transaction.</p>
+  </div>
+
+  <h3>What was built</h3>
+  <ul>
+    <li>Students list, and a passbook-style statement with running balance, fee-head progress, installments and payments.</li>
+    <li>Record payment (cash, UPI, card, bank transfer) with a live allocation preview and a visibly marked gateway simulator; check status; mark as failed; reverse; concessions.</li>
+    <li>Payment detail with a state track, allocations, ledger entries and audit trail; printable A5 receipts with the amount in words.</li>
+    <li>Reconciliation upload, the four buckets and their resolutions; a dashboard; a readable audit log; simulated roles (admin, accountant, student) enforced by the server.</li>
+    <li>Five AI features, each checked in code and decided by a person (section 12): Reconciliation Copilot, Ask Kosha, smart import, messages to parents (English, Kannada, Hindi), daily brief.</li>
+    <li>192 unit, 13 integration, 3 end-to-end tests, 21 AI evaluations, a nine-check ledger script.</li>
+  </ul>
+</section>
+
+<!-- ============================ 2. Problem ============================ -->
+<section class="major" id="problem">
+  <h2>2. Problem understanding</h2>
+  <h3>Who uses it</h3>
+  <table>
+    <thead><tr><th style="width:22%">User</th><th>What they need</th></tr></thead>
+    <tbody>
+      <tr><td>Accountant</td><td>Record counter and bank payments quickly and correctly; know which installment a payment cleared; chase pending online payments; reconcile against the gateway every day.</td></tr>
+      <tr><td>Admin (bursar, principal's office)</td><td>Approve concessions, handle reversals (bounced transfers, chargebacks), see what is collected and what is overdue, answer audit questions.</td></tr>
+      <tr><td>Student or parent</td><td>See an honest statement, pay online, get a receipt, and know that a payment stuck at the gateway has not been lost.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>What actually goes wrong with fee collection</h3>
+  <table>
+    <thead><tr><th style="width:22%">Problem</th><th>What it looks like</th><th style="width:30%">How Kosha responds</th></tr></thead>
+    <tbody>
+      <tr><td>Lost payments</td><td>A parent paid by UPI, the gateway timed out, and the college shows nothing. Or a transfer arrives with no record at the counter.</td><td>Timed-out payments stay <em>pending</em> with a gateway reference until check status or reconciliation settles them.</td></tr>
+      <tr><td>Double charges</td><td>A slow form is submitted twice; two receipts for one payment.</td><td>An idempotency key per form; the database returns the existing payment on a repeat.</td></tr>
+      <tr><td>Ambiguous pending states</td><td>"Did it go through?" Nobody knows, so it is recorded twice or not at all.</td><td>An explicit state machine; only SUCCESS touches the ledger.</td></tr>
+      <tr><td>Disputes</td><td>"I paid tuition, why does it say hostel is due?"</td><td>Allocation is a fixed, visible rule (oldest due date first), shown before submitting and on every receipt.</td></tr>
+      <tr><td>Silent corrections</td><td>Someone edits last month's entry to make totals match.</td><td>Append-only ledger; corrections are new entries with reasons.</td></tr>
+      <tr><td>Audit questions</td><td>"Who reversed this, and why?"</td><td>Every money function writes an audit line with actor, action and details.</td></tr>
+      <tr><td>Bank vs books</td><td>Gateway settles a different amount, or never settles a payment we marked paid.</td><td>Reconciliation buckets exceptions; mismatches are flagged, never auto-fixed.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================ 3. Assumptions ============================ -->
+<section class="major" id="assumptions">
+  <h2>3. Assumptions</h2>
+  <ol>
+    <li><b>Roles are simulated.</b> A role switcher sets a cookie; the server enforces one permission matrix. Real login and per-user row-level security are out of scope for a take-home, but the permission checks sit exactly where real auth would plug in.</li>
+    <li><b>One institution, one academic year (2026-27), INR only.</b> This keeps the data model focused on the ledger; multi-tenancy and currencies are future work.</li>
+    <li><b>The payment gateway is a mock.</b> A "simulate outcome" control (succeed, fail, time out) stands in for the provider; a small table holds what the gateway "knows", so check status and settlement have something to ask.</li>
+    <li><b>A timed-out payment usually did go through.</b> The mock gateway reports success when asked later, which is the common real-world case; staff can still mark a pending payment as failed.</li>
+    <li><b>Settlement is T+1.</b> A file whose settlement dates run from D1 to D2 covers payments made from D1−1 to D2−1; only payments in that window can be "missing in settlement".</li>
+    <li><b>Settlement amounts are gross.</b> The file's amount is compared directly with the payment; gateway fees (MDR) are not modelled.</li>
+    <li><b>Fee demand for the whole year is raised on 1 July</b>, as installments per fee head per term. There is no fee-structure editor.</li>
+    <li><b>Allocation is oldest due date first</b>, fee-head order breaking ties (tuition, hostel, exam, library). Overpayment is kept as an advance and applied automatically when something reopens.</li>
+    <li><b>Receipt numbers are one global sequence</b> with the academic year as a prefix (<code>KSH/2026-27/000123</code>). Gaps are possible if a transaction rolls back after taking a number; this is normal for database sequences and is noted.</li>
+    <li><b>The demo is anchored to 24 September 2026.</b> Seed dates are fixed so gateway references and the sample settlement file always line up after a reset.</li>
+    <li><b>Amounts above ₹10,00,000 in one payment are refused</b> as a guard against typing errors; it is a sanity limit, not a business rule.</li>
+  </ol>
+  <h3>The demo data</h3>
+  <p>60 students across B.Tech CSE, BCA and B.Com, 408 installments (4 fee heads × 2 terms; hostel for about 40%), 66 payments over about 45 days, and 469 ledger entries. Seven named students each show one scenario: fully paid (Ananya Rao), partly paid (Rohan Kulkarni), overdue with nothing paid (Vikram Singh), merit concession (Priya Nair), a returned bank transfer that was reversed (Arjun Mehta), a UPI payment stuck in pending (Sneha Iyer), and an advance from overpaying (Karthik Reddy). All history after the fee demand is written through the same database functions the app uses.</p>
+</section>
+
+<!-- ============================ 4. Architecture ============================ -->
+<section class="major" id="architecture">
+  <h2>4. Architecture</h2>
+  <figure class="diagram cap-150">
+<pre class="mermaid">
+%%{init: {"flowchart": {"rankSpacing": 30, "nodeSpacing": 26, "wrappingWidth": 420}, "themeVariables": {"fontSize": "16px"}}}%%
+flowchart TB
+  subgraph B["Browser"]
+    UI["Pages and drawers<br/>(React, Radix)"]
+  end
+  subgraph V["Next.js on Vercel"]
+    RSC["Server components<br/>read models"]
+    API["Route handlers<br/>zod · role checks · one error shape"]
+    DOM["Domain layer (pure TS)<br/>reconcile · allocation preview<br/>payment-state · permissions"]
+    AI["AI layer (LangGraph)<br/>read-only tools · verifiers"]
+  end
+  OAI["OpenAI API"]
+  subgraph S["Supabase Postgres"]
+    FN["Money functions (plpgsql)<br/>record · confirm · fail · reverse<br/>concession · reconcile · reset"]
+    TB["Tables<br/>append-only ledger"]
+    VW["Views<br/>balances · installment status"]
+    TR["Triggers and constraints<br/>no update/delete · legal transitions"]
+  end
+  UI -- "fetch JSON" --> API
+  UI -- "navigate" --> RSC
+  API --> DOM
+  API --> AI
+  AI <--> OAI
+  AI -- "select" --> VW
+  API -- "supabase.rpc (one transaction)" --> FN
+  RSC -- "select" --> VW
+  FN --> TB
+  TR -. "guards" .-> TB
+  VW --> TB
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  classDef db fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  class UI,RSC,API,DOM,AI sys
+  classDef ext fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  class OAI ext
+  class FN,TB,VW,TR db
+</pre>
+    <figcaption><b>Figure 1.</b> System architecture. The browser never talks to the database; the service-role and OpenAI keys live only in server code.</figcaption>
+  </figure>
+
+  <h3>Why this stack</h3>
+  <ul>
+    <li><b>One codebase.</b> Next.js serves the pages, the API routes and the server-rendered read models, so types are shared from the database row to the button label.</li>
+    <li><b>Managed Postgres.</b> Money needs real transactions, row locks, constraints, sequences and triggers. Supabase provides a Postgres with those features and nothing to operate.</li>
+    <li><b>One-click deploy.</b> Vercel builds the repository on push; the only configuration is three environment variables, plus <code>OPENAI_API_KEY</code> for the AI features.</li>
+  </ul>
+  <h3>Where each rule lives</h3>
+  <table>
+    <thead><tr><th style="width:30%">Layer</th><th>Responsibility</th></tr></thead>
+    <tbody>
+      <tr><td>Database functions</td><td>Every money rule: locking, idempotency, allocation, receipts, ledger, audit. The source of truth.</td></tr>
+      <tr><td>Constraints and triggers</td><td>Defence in depth: append-only tables, legal transitions, sign of ledger amounts, one ledger entry per source row, allocations can only point at the same student's installments.</td></tr>
+      <tr><td>Grants</td><td>The API's service role may read tables and execute the public functions, nothing else. Even a leaked key cannot UPDATE the ledger.</td></tr>
+      <tr><td>Route handlers</td><td>zod validation, the permission matrix, ownership checks for the student role, mapping database errors to readable messages.</td></tr>
+      <tr><td>AI layer (section 12)</td><td>LangGraph agents with read-only tools, and verifiers that check every figure and reference before anything is shown. Proposals only; acting on one goes through the database functions above.</td></tr>
+      <tr><td>Domain layer (pure TS)</td><td>Reconciliation matching, allocation preview, statement building, audit sentences, the state machine for the UI. All unit tested.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================ 5. Data model ============================ -->
+<section class="major" id="data-model">
+  <h2>5. Data model</h2>
+  <figure class="diagram cap-135">
+<pre class="mermaid">
+erDiagram
+  courses ||--o{ students : enrols
+  students ||--o{ installments : "is billed"
+  fee_heads ||--o{ installments : "classifies"
+  installments ||--o{ concessions : "reduced by"
+  students ||--o{ payments : makes
+  payments ||--o{ payment_events : "moves through"
+  payments ||--o{ payment_allocations : "splits into"
+  installments ||--o{ payment_allocations : "is paid by"
+  students ||--o{ ledger_entries : "has"
+  payment_transitions }o--o{ payments : "allows"
+  payments |o--o| mock_gateway_txns : "gateway view"
+  reconciliation_runs ||--o{ reconciliation_items : contains
+  payments |o--o{ reconciliation_items : "matched to"
+  students { uuid id PK
+    text roll_no UK
+    uuid course_id FK }
+  installments { uuid id PK
+    uuid student_id FK
+    uuid fee_head_id FK
+    smallint term
+    bigint amount_paise
+    date due_date }
+  concessions { uuid id PK
+    uuid installment_id FK
+    bigint amount_paise
+    text reason
+    text approved_by }
+  payments { uuid id PK
+    uuid student_id FK
+    bigint amount_paise
+    text mode
+    text status
+    text gateway_ref UK
+    uuid idempotency_key UK
+    text receipt_no UK }
+  payment_allocations { uuid id PK
+    uuid payment_id FK
+    uuid installment_id FK
+    bigint amount_paise }
+  ledger_entries { bigint id PK
+    uuid student_id FK
+    text type
+    bigint amount_paise
+    uuid ref_id }
+  reconciliation_items { uuid id PK
+    uuid run_id FK
+    text bucket
+    text gateway_ref
+    text resolution }
+  audit_log { bigint id PK
+    text actor
+    text action
+    jsonb details }
+</pre>
+    <figcaption><b>Figure 2.</b> Entity relationships (key columns only). <code>audit_log</code> refers to records by entity and id rather than a foreign key, so it can describe any table.</figcaption>
+  </figure>
+  <h3>Why money is stored in paise</h3>
+  <p>Floating-point numbers cannot represent most decimal fractions exactly: 0.1 + 0.2 is not 0.3. A fee system adds, splits and compares amounts constantly, and a one-paisa drift is a reconciliation exception. Every amount is therefore an integer number of paise: <code>BIGINT</code> in Postgres and a safe integer in TypeScript. Rupees appear only when formatting for display (<code>formatINR</code>) and parsing user input (<code>toPaise</code>, which rejects more than two decimals and never goes through floating point).</p>
+  <h3>Why the ledger is append-only</h3>
+  <p>A balance that can be edited cannot be trusted or explained. In Kosha the balance is the sum of ledger entries, each of which points at the row that caused it: a <code>DEMAND</code> at an installment, a <code>CONCESSION</code> at a concession, a <code>PAYMENT</code> and possibly a <code>REVERSAL</code> at a payment. Triggers reject UPDATE and DELETE, a check constraint forces the sign to match the type, and a unique index allows at most one entry of each type per source row, which is what makes "confirm twice" harmless. The verification script cross-checks the ledger against balances computed independently from the domain tables.</p>
+</section>
+
+<!-- ============================ 6. Lifecycle ============================ -->
+<section class="major" id="lifecycle">
+  <h2>6. Payment lifecycle</h2>
+  <div class="cols">
+    <figure class="diagram cap-62">
+<pre class="mermaid">
+stateDiagram-v2
+  direction TB
+  [*] --> INITIATED
+  INITIATED --> PENDING: sent to gateway
+  INITIATED --> SUCCESS: cash / bank transfer
+  PENDING --> SUCCESS: gateway confirms,<br/>check status,<br/>reconciliation
+  PENDING --> FAILED: declined /<br/>marked failed
+  SUCCESS --> REVERSED: admin, with reason
+  FAILED --> [*]
+  REVERSED --> [*]
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef bad fill:#FCF1F0,stroke:#EBC4C0,color:#16213A
+  class SUCCESS ok
+  class PENDING wait
+  class FAILED bad
+</pre>
+      <figcaption><b>Figure 3.</b> Payment state machine. Any other move is rejected by a database trigger; the same table in TypeScript is tested against the SQL.</figcaption>
+    </figure>
+    <div>
+      <h3 style="margin-top:0">Rules</h3>
+      <ul>
+        <li>Only <b>SUCCESS</b> writes the ledger, allocates and issues a receipt.</li>
+        <li><b>Cash and bank transfer</b> go straight to SUCCESS; <b>UPI and card</b> pass through PENDING.</li>
+        <li><b>Time out</b> leaves it PENDING with its gateway reference, not counted in the balance.</li>
+        <li>A <b>failed</b> attempt is kept; a retry is a new payment with a new key.</li>
+        <li><b>Reversal</b> (admin, with reason) adds a REVERSAL entry and reopens the installments it paid.</li>
+      </ul>
+    </div>
+  </div>
+
+  <figure class="diagram cap-68">
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant U as Accountant (drawer)
+  participant A as POST /api/payments
+  participant F as record_payment()
+  participant D as Postgres tables
+  U->>A: amount, mode, idempotency key
+  A->>A: zod validation, role check
+  A->>F: supabase.rpc (one transaction)
+  F->>D: SELECT student FOR UPDATE (lock)
+  F->>D: key already used? return existing payment
+  F->>D: INSERT payment INITIATED, event
+  F->>D: SUCCESS: receipt no. from sequence
+  F->>D: INSERT ledger PAYMENT (−amount)
+  F->>D: allocate oldest due first
+  F->>D: INSERT audit_log
+  F-->>A: payment (COMMIT)
+  A-->>U: 201, toast, row flashes
+</pre>
+    <figcaption><b>Figure 4.</b> Recording a cash payment. Everything between the lock and the commit happens in one transaction or not at all.</figcaption>
+  </figure>
+
+  <h3>Idempotency, locking and allocation</h3>
+  <p><b>Idempotency.</b> Each opening of the payment drawer creates a UUID; the column is UNIQUE and is checked after the student lock, so double clicks, retries and parallel submits yield one payment (repeats get it back with HTTP 200). A reused key with a different amount is refused.</p>
+  <p><b>Locking.</b> Every money function locks the student row first, then the payment, then the reconciliation item (a fixed order avoids deadlocks), so two payments for one student cannot allocate the same rupee twice.</p>
+  <p><b>Allocation.</b> After any success or reversal, unallocated money is applied to open installments, oldest due date first. "Paid" counts only allocations of payments that are <em>currently</em> SUCCESS, so a reversal reopens installments without deleting rows; the rest is an advance.</p>
+</section>
+
+<!-- ============================ 7. Reconciliation ============================ -->
+<section class="major" id="reconciliation">
+  <h2>7. Reconciliation</h2>
+  <figure class="diagram cap-105">
+<pre class="mermaid">
+flowchart TD
+  U["Upload settlement CSV"] --> V{"Header and rows valid?"}
+  V -- "missing columns" --> X["File rejected,<br/>columns named"]
+  V -- "bad or duplicate rows" --> SA["Rows set aside<br/>with line and reason"]
+  V -- "valid rows" --> M{"Match on gateway_ref"}
+  M -- "amounts differ" --> B2["Amount mismatch"]
+  M -- "ours SUCCESS" --> B1["Matched"]
+  M -- "ours PENDING" --> B3["Settled but<br/>pending here"]
+  M -- "unknown / ours FAILED" --> SA
+  W["Our SUCCESS in the T+1<br/>window, not in the file"] --> B4["Missing in<br/>settlement"]
+  B3 -- "Mark as paid" --> C["confirm_payment()<br/>receipt, ledger, allocation"]
+  B2 -- "Reviewed + note" --> N["Resolution recorded<br/>with who and when"]
+  B4 -- "Reviewed + note" --> N
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef bad fill:#FCF1F0,stroke:#EBC4C0,color:#16213A
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  class B1,C ok
+  class B3 wait
+  class B2,B4,X,SA bad
+  class U,V,M,W,N sys
+</pre>
+    <figcaption><b>Figure 5.</b> Reconciliation flow. Matching is a pure TypeScript function; storing and resolving go through database functions.</figcaption>
+  </figure>
+
+  <h3>The four buckets, with the sample file</h3>
+  <p>The sample (<code>public/samples/settlement_sample.csv</code>, 36 rows) was generated from the seed with deliberate discrepancies. Against a fresh reset:</p>
+  <table>
+    <thead><tr><th style="width:24%">Bucket</th><th>Rule</th><th style="width:36%">Example from the sample</th><th>Resolution</th></tr></thead>
+    <tbody>
+      <tr><td>Matched (33)</td><td>Reference and amount agree; we have it as SUCCESS (or later reversed).</td><td>MGW7300000002, Rohan Kulkarni, ₹82,500.</td><td>None needed.</td></tr>
+      <tr><td>Amount mismatch (1)</td><td>Reference found, amounts differ. Takes precedence over status.</td><td>MGW7300000023, Lakshmi Narayanan: file ₹62,000, recorded ₹62,500 (short capture).</td><td>Mark reviewed with a note. Never auto-corrected.</td></tr>
+      <tr><td>Settled but pending here (2)</td><td>The gateway settled it; we still have it PENDING.</td><td>MGW7300000005, Sneha Iyer, ₹86,500 (timed out 21 Sep); MGW7300000008, ₹76,000.</td><td>Mark as paid: confirms the payment in one transaction.</td></tr>
+      <tr><td>Recorded here, missing in settlement (1)</td><td>Our online SUCCESS inside the file's settlement window, absent from the file.</td><td>MGW7300000039, Sowmya Raghavan, ₹40,000 (paid 10 Aug).</td><td>Mark reviewed after asking the gateway.</td></tr>
+    </tbody>
+  </table>
+  <p>Rows that fit no bucket are listed as "set aside" with the file line and a reason (malformed, duplicate, non-settlement status, unknown reference, or settled but failed here). Each run stores its totals, rejected rows and a file hash, so a repeated upload is flagged.</p>
+</section>
+
+<!-- ============================ 8. Decisions ============================ -->
+<section class="major" id="decisions">
+  <h2>8. Engineering decisions and trade-offs</h2>
+  <table>
+    <thead><tr><th style="width:20%">Decision</th><th style="width:22%">Alternative considered</th><th>Why this choice</th><th style="width:22%">Cost</th></tr></thead>
+    <tbody>
+      <tr><td>Money rules in plpgsql functions</td><td>Business logic in TypeScript with a transaction client</td><td>One round trip, one transaction, row locks and constraints right next to the data; works through supabase-js without a connection pool of our own.</td><td>Two languages; SQL is harder to unit test (covered by integration tests).</td></tr>
+      <tr><td>Append-only ledger enforced by triggers</td><td>Mutable balance column on students</td><td>History is always explainable; corrections are visible; balance can be cross-checked.</td><td>Reports must sum; reversals need linking in the UI.</td></tr>
+      <tr><td>Integer paise</td><td><code>numeric</code> rupees</td><td>Exact arithmetic in both SQL and TypeScript; no rounding rules to agree on.</td><td>Formatting and parsing at every edge.</td></tr>
+      <tr><td>"Paid" derived from allocations of SUCCESS payments</td><td>Delete or negate allocations on reversal</td><td>Reversal reopens installments without touching allocation rows; one query answers "what did this payment pay".</td><td>Slightly more complex views.</td></tr>
+      <tr><td>Automatic re-allocation of advance</td><td>Manual "apply advance" action</td><td>A student never has both spare credit and an open installment (checked by the verification script).</td><td>An old receipt can gain a line when an advance is applied later.</td></tr>
+      <tr><td>Reconciliation matching in pure TypeScript</td><td>Matching in SQL</td><td>Easy to unit test every edge case (39 tests); readable rules.</td><td>The system payments are loaded into memory (fine at this scale).</td></tr>
+      <tr><td>Service role limited by grants</td><td>Full service-role access</td><td>A leaked key or a bug in a route cannot write the ledger directly.</td><td>Every write needs a function.</td></tr>
+      <tr><td>Simulated roles via a cookie</td><td>Supabase Auth</td><td>Out of scope for the assignment; the permission matrix is where real auth would plug in.</td><td>Not secure for real use; stated as an assumption.</td></tr>
+      <tr><td>Fixed demo calendar</td><td>Seed relative to today</td><td>Gateway refs, receipts and the static sample CSV always line up after a reset.</td><td>The 30-day trend thins out if viewed long after 24 Sep 2026.</td></tr>
+      <tr><td>Server components read, routes write</td><td>Client-side data fetching everywhere</td><td>Statements render fully on the server; after a change the page re-renders from the database, the single source of truth.</td><td>A full refresh of the page data after each action.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================ 9. Edge cases ============================ -->
+<section class="major" id="edge-cases">
+  <h2>9. Edge cases and how each is handled</h2>
+  <table>
+    <thead><tr><th style="width:24%">Case</th><th>Handling</th><th style="width:18%">Proved by</th></tr></thead>
+    <tbody>
+      <tr><td>Double submit</td><td>Idempotency key per form open (UNIQUE), checked after the student lock; repeats return the same payment. Submit button disabled while in flight.</td><td>Integration (serial and 3 in parallel)</td></tr>
+      <tr><td>Partial payment</td><td>Allocated oldest due first; the last installment it touches is partly paid. The preview says "part of … ; ₹X will still be due".</td><td>Unit, E2E, seed (Rohan)</td></tr>
+      <tr><td>Overpayment</td><td>Never rejected; the remainder is an advance (negative balance), shown as "Advance", used when anything reopens.</td><td>Unit, seed (Karthik)</td></tr>
+      <tr><td>Concession after partial payment</td><td>Capped at demand − concessions − paid for that installment; checked in the form, zod and the database.</td><td>Integration</td></tr>
+      <tr><td>Reversal of an allocated payment</td><td>REVERSAL entry; allocations stop counting; installments reopen; spare advance re-applied. Second reversal refused.</td><td>Integration, E2E</td></tr>
+      <tr><td>Stuck pending</td><td>Shown on the statement and dashboard; resolved by check status, reconciliation "mark as paid", or "mark as failed" with a reason.</td><td>Integration, E2E</td></tr>
+      <tr><td>Confirm racing itself</td><td>Row lock plus one-entry-per-source unique index: exactly one confirm succeeds, the other gets "already marked as paid".</td><td>Integration</td></tr>
+      <tr><td>Amount mismatch</td><td>Own bucket; both amounts and the difference shown; only "reviewed with a note" is allowed.</td><td>Unit, manual</td></tr>
+      <tr><td>Duplicate refs in the CSV</td><td>Identical copies counted once (others listed as duplicates); copies with different amounts all set aside, because nobody can know which is right.</td><td>Unit</td></tr>
+      <tr><td>Malformed CSV rows</td><td>Missing columns reject the file; bad rows (wrong field count, bad amount, date or status) are set aside with the line number; blank lines ignored; BOM and CRLF handled.</td><td>Unit</td></tr>
+      <tr><td>Same file uploaded twice</td><td>New run, flagged with a link to the earlier run; the dashboard lists each open item once; resolving an already-confirmed payment is harmless.</td><td>Manual</td></tr>
+      <tr><td>Parallel payments</td><td>Student row lock serialises them; allocations never exceed demand.</td><td>Integration (6 in parallel)</td></tr>
+      <tr><td>Illegal state transitions</td><td>Trigger checks every status change against <code>payment_transitions</code>; functions give specific messages first.</td><td>Unit (all 25 pairs), verify script</td></tr>
+      <tr><td>Zero or negative amounts</td><td>Rejected by <code>toPaise</code>, zod and CHECK constraints (<code>amount_paise &gt; 0</code>).</td><td>Unit, integration</td></tr>
+      <tr><td>Wrong role</td><td>UI hides the action; the API answers 403 with the role named; SQL functions check the actor again for reverse, concession and student payments.</td><td>Unit (matrix), E2E</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================ 10. Testing ============================ -->
+<section class="major" id="testing">
+  <h2>10. Validation and testing</h2>
+  <h3>Validation at every boundary</h3>
+  <p>Input is validated three times with the same rules: in the form (inline messages), by zod at the route handler (422 with the field name), and in the database by the function and by CHECK constraints. Database errors carry a machine code in the Postgres HINT, which the API maps to an HTTP status and a readable message ("This payment was already reversed.").</p>
+  <h3>What the tests cover</h3>
+  <table>
+    <thead><tr><th style="width:22%">Suite</th><th class="num" style="width:10%">Tests</th><th>Covers</th></tr></thead>
+    <tbody>
+      <tr><td>Unit (Vitest)</td><td class="num">192</td><td>AI verifiers (made-up figures, unknown evidence, forbidden actions, undisclosed duplicates, message language, script and gender), date periods, the settlement-file converter and its sampling, daily-brief signals and review; Payment state machine, every legal and illegal pair, and that the TypeScript table equals the SQL one; reconciliation bucketing, duplicate refs, bad rows, amount formats, T+1 window, CSV parsing (BOM, CRLF, quoted amounts, field counts); <code>toPaise</code>, <code>formatINR</code>, amount in words; allocation preview; statement builder; permission matrix; dates in IST; error mapping.</td></tr>
+      <tr><td>Integration (Vitest, real database)</td><td class="num">13</td><td>Same idempotency key twice and three times in parallel; key reuse with another amount; timeout then confirm writes exactly one ledger entry; confirm racing itself; failed payment writes nothing; reversal reopens the installment; double reversal and non-admin reversal refused; concession above remaining refused, exactly remaining accepted; six parallel payments allocate correctly; the API role cannot write the ledger; the verification script passes afterwards.</td></tr>
+      <tr><td>End to end (Playwright)</td><td class="num">3</td><td>Record a cash payment (prefill, preview, validation, receipt, balance and row update); an online payment times out and a settlement file resolves it through "mark as paid"; an admin reverses a payment and the installment reopens, an accountant has no such action, a second reversal returns 409.</td></tr>
+      <tr><td>AI evaluations (real model)</td><td class="num">21</td><td>Copilot 4, Ask Kosha 8, smart import 2, parent messages 4, daily brief 3; right answers computed independently from the database (section 12.6).</td></tr>
+      <tr><td>Ledger verification (SQL)</td><td class="num">9</td><td>Balance = SUM(ledger) for every student; allocations + concessions ≤ demand; allocations ≤ payment; ledger entries match payment status; one DEMAND per installment; no spare credit next to an open installment; last event matches status; ledger rejects UPDATE and DELETE; FAILED → SUCCESS rejected.</td></tr>
+    </tbody>
+  </table>
+  <h3>Latest results</h3>
+  <table>
+    <thead><tr><th>Command</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td><code>npm run typecheck</code> · <code>npm run lint</code></td><td>No errors, no warnings</td></tr>
+      <tr><td><code>npm run test:unit</code></td><td>Test files 11 passed · Tests 192 passed</td></tr>
+      <tr><td><code>npm run eval:ai</code></td><td>21 passed: Copilot 4/4 · Ask Kosha 8/8 · import and messages 6/6 · brief 3/3</td></tr>
+      <tr><td><code>npm run e2e</code></td><td>3 passed (1.3 min)</td></tr>
+      <tr><td><code>npm run db:reset</code></td><td>All nine ledger checks passed (2.7 s)</td></tr>
+      <tr><td><code>npm run build</code></td><td>Compiled successfully</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================ 11. Walkthrough ============================ -->
+<section class="major" id="walkthrough">
+  <h2>11. Product walkthrough</h2>
+  <figure class="shot cap-105">
+    <img src="../assets/doc/dashboard.png" alt="Dashboard">
+    <figcaption><b>Figure 6.</b> Dashboard. One summary strip (collected, outstanding, overdue, pending), a 30-day collection trend, overdue by course, and a needs-attention list linking to each stuck payment, open reconciliation item and long-overdue account.</figcaption>
+  </figure>
+  <figure class="shot cap-105">
+    <img src="../assets/doc/record-payment.png" alt="Record payment drawer">
+    <figcaption><b>Figure 7.</b> Record payment opens in a drawer so the statement stays visible. The gateway simulator is marked as a demo control; the preview states where the money goes before anything is submitted.</figcaption>
+  </figure>
+</section>
+
+<section class="major">
+  <figure class="shot cap-150">
+    <img src="../assets/doc/statement.png" alt="Student statement">
+    <figcaption><b>Figure 8.</b> The statement, the signature screen. The balance is the largest figure with a plain sentence under it; fee-head bars show paid, overdue and not yet due; the passbook keeps a running balance. Arjun's returned bank transfer stays visible, struck through and linked to its reversal.</figcaption>
+  </figure>
+  <div class="cols" style="grid-template-columns: 0.8fr 1.2fr; align-items:start">
+    <figure class="shot cap-75">
+      <img src="../assets/doc/receipt.png" alt="Receipt">
+      <figcaption><b>Figure 9.</b> A5 receipt with the amount in words.</figcaption>
+    </figure>
+    <figure class="shot cap-75">
+      <img src="../assets/doc/audit.png" alt="Audit log">
+      <figcaption><b>Figure 10.</b> Audit log: one readable line per money function.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="major">
+  <figure class="shot cap-90">
+    <img src="../assets/doc/reconciliation-run.png" alt="Reconciliation run">
+    <figcaption><b>Figure 11.</b> A reconciliation run of the sample file: four buckets with counts and amounts; each exception carries its resolve action.</figcaption>
+  </figure>
+  <figure class="shot cap-135">
+    <img src="../assets/doc/payment-detail.png" alt="Payment detail">
+    <figcaption><b>Figure 12.</b> Payment detail: state track with actor and time, the installments it paid (struck through: it was reversed), the ledger entries it wrote, and the audit trail. Not shown: students list, payments list, concession and resolve drawers, the student-role view, the command palette and phone layouts.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================ 12. AI features ============================ -->
+<section class="major" id="ai-features">
+  <h2>12. AI features</h2>
+  <p class="lead">Kosha has five AI features, built with OpenAI (<code>gpt-4.1-mini</code>) through LangChain and LangGraph. They are designed around one rule: <b>the AI never moves money.</b> It reads, investigates, explains and drafts; a person decides, and every decision goes through the same locked, audited database functions as the rest of the app.</p>
+
+  <table>
+    <thead><tr><th style="width:22%">Feature</th><th>What it does for the accounts office</th><th style="width:20%">Where</th></tr></thead>
+    <tbody>
+      <tr><td><b>Reconciliation Copilot</b></td><td>Investigates each reconciliation exception (gateway record, payment history, duplicate payments, the file, other files) and proposes a resolution with evidence, a ready note and, when needed, a drafted message to the gateway.</td><td>Reconciliation run: <i>Investigate</i>, <i>Investigate all</i></td></tr>
+      <tr><td><b>Ask Kosha</b></td><td>Answers questions about the fees in plain English ("Which BCA students are overdue by more than 30 days?"), with a linked table and follow-ups.</td><td>Top bar on every page, or Ctrl+J</td></tr>
+      <tr><td><b>Smart settlement import</b></td><td>Maps a settlement file in a gateway's own layout to Kosha's four columns, with a preview the accountant confirms.</td><td>Reconciliation upload</td></tr>
+      <tr><td><b>Messages to parents</b></td><td>Drafts reminders, overdue notices, balance explanations and payment confirmations in English, Kannada or Hindi, for WhatsApp or email.</td><td>Student page: <i>Message parent</i></td></tr>
+      <tr><td><b>Daily finance brief</b></td><td>Opens the dashboard with the three things that most need attention today, each with the reason and a button to act.</td><td>Dashboard</td></tr>
+    </tbody>
+  </table>
+
+  <figure class="diagram cap-195">
+<pre class="mermaid">
+%%{init: {"flowchart": {"rankSpacing": 26, "nodeSpacing": 24, "wrappingWidth": 420, "padding": 8}, "themeVariables": {"fontSize": "17px"}}}%%
+flowchart TB
+  UIX["Browser<br/>Copilot · Ask · Import · Message · Brief"]
+  subgraph N["Next.js route handlers · server only"]
+    AG["LangGraph graph<br/>agent loop, structured output"]
+    TL["Read-only tools<br/>typed queries"]
+    VF["Verifier (pure TS)<br/>figures · evidence · rules"]
+  end
+  OAI["OpenAI API<br/>gpt-4.1-mini"]
+  RD["Postgres tables and views<br/>SELECT only"]
+  FN["SQL functions<br/>resolve · save · audit"]
+  UIX -- "request, streamed steps back" --> AG
+  AG <--> OAI
+  AG --> TL --> RD
+  AG --> VF
+  UIX -- "a person accepts" --> FN
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef ext fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  class UIX,AG,TL,VF sys
+  class RD,FN ok
+  class OAI ext
+</pre>
+    <figcaption><b>Figure 13.</b> Where the AI sits. The OpenAI key is read only in server code. The model's tools can only read. The only writes are made by SQL functions after a person acts, or to store an AI result (a proposal, a brief, an audit line).</figcaption>
+  </figure>
+</section>
+
+<section class="major">
+  <h3>The pattern every feature follows</h3>
+  <p>Language models are good at reading messy situations and writing clearly, and unreliable at arithmetic, at quoting figures exactly and at following rules every time. Each feature is therefore split so that <b>code owns the facts and the rules, and the model owns the judgement and the words</b>. Then code checks the model's work before anyone sees it.</p>
+  <figure class="diagram cap-195">
+<pre class="mermaid">
+%%{init: {"flowchart": {"rankSpacing": 26, "nodeSpacing": 24, "wrappingWidth": 420, "padding": 8}, "themeVariables": {"fontSize": "17px"}}}%%
+flowchart TB
+  G["1 · Gather<br/>code or read-only tools fetch the facts"] --> P["2 · Propose<br/>the model writes structured output"]
+  P --> V["3 · Verify in code<br/>figures · references · rules"]
+  V -- "fails once" --> P
+  V -- "passes" --> H["4 · A person decides<br/>accept · edit · dismiss"]
+  V -- "fails again" --> D["Downgrade or fall back"] --> H
+  H --> DB["5 · SQL function<br/>one transaction + audit"]
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef ext fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  class G,P sys
+  class V,D wait
+  class H,DB ok
+</pre>
+    <figcaption><b>Figure 14.</b> Gather, propose, verify, decide. Each feature is a LangGraph state machine with these nodes; the verify step is ordinary, unit-tested TypeScript.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th style="width:26%">Control</th><th>How it is enforced</th></tr></thead>
+    <tbody>
+      <tr><td>No money moves without a person</td><td>Tools are read-only queries. Accepting a Copilot suggestion runs <code>decide_ai_investigation()</code>, which calls <code>resolve_recon_item()</code> in the same transaction; escalations cannot be accepted at all.</td></tr>
+      <tr><td>Every figure is real</td><td>A shared checker extracts every ₹ amount from the model's text and table cells; each must be one a tool returned (or the user typed). Totals, differences, percentages and date ranges are computed in code, not by the model.</td></tr>
+      <tr><td>Every claim has a source</td><td>Tools register evidence ids (<code>gateway:MGW…</code>, <code>student:CSE24-001</code>, <code>check:duplicates</code>); findings, table rows and sources must cite ids that exist, and the UI turns them into links.</td></tr>
+      <tr><td>Rules the model must follow</td><td>Allowed actions per bucket and payment status; a possible duplicate payment must be disclosed; actions in the brief must belong to their signal; messages must be in the chosen script, use ₹ digits and assume no gender.</td></tr>
+      <tr><td>Least data to OpenAI</td><td>Smart import sends only the header and at most 25 sample rows. Messages send the facts for one student. The key never reaches the browser bundle (checked after every build).</td></tr>
+      <tr><td>Auditable</td><td>Investigations, accept and dismiss decisions, drafted messages and briefs are stored or written to the audit log with who, when and which model.</td></tr>
+      <tr><td>Works without AI</td><td>With no <code>OPENAI_API_KEY</code> the AI buttons are hidden, and the daily brief is written by rules. Nothing else changes.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="major" id="ai-copilot">
+  <h3>12.1 Reconciliation Copilot</h3>
+  <p><b>Problem.</b> A reconciliation run leaves exceptions: amounts that differ, money the gateway settled that is still pending here, payments recorded here but missing from the file. Each one takes an accountant several screens and a judgement call.</p>
+  <p><b>What it does.</b> <i>Investigate</i> on an exception, or <i>Investigate all</i> for the run, streams the agent's steps live ("Asking the gateway about MGW7300000005", "Checking for a second payment of the same amount") and ends with a diagnosis: a headline, the root cause, a confidence, numbered findings linked to their records, the suggested action with an editable note, and for shortfalls a ready message to the gateway's support desk.</p>
+  <figure class="diagram cap-215">
+<pre class="mermaid">
+%%{init: {"flowchart": {"rankSpacing": 26, "nodeSpacing": 24, "wrappingWidth": 420, "padding": 8}, "themeVariables": {"fontSize": "17px"}}}%%
+flowchart TB
+  I["investigate<br/>the model chooses tools, max 5 rounds"] <--> T["read-only tools<br/>gateway record · payment timeline · student account<br/>duplicate check · search this file · other runs"]
+  I --> D["diagnose<br/>structured output"]
+  D --> V["verify<br/>action allowed · figures in evidence<br/>ids exist · duplicate disclosed"]
+  V -- "fails once" --> D
+  V -- "fails again" --> X["ESCALATE, low confidence"]
+  V -- "passes" --> E["saved as a proposal"]
+  X --> E
+  E --> H["accountant: accept · edit note · dismiss"]
+  H -- "accept" --> F["decide_ai_investigation()<br/>→ resolve_recon_item()"]
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef ext fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  class I,T,D sys
+  class V,X wait
+  class E,H,F ok
+</pre>
+    <figcaption><b>Figure 15.</b> The Copilot's LangGraph. The agent decides which of six tools to call; code checks the diagnosis; a person applies it.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th style="width:26%">Case in the sample file</th><th>What the Copilot finds</th><th style="width:20%">Suggestion</th></tr></thead>
+    <tbody>
+      <tr><td>Settled but pending here: Sneha Iyer, MGW7300000005, ₹86,500</td><td>The gateway's record says SUCCESS for ₹86,500; no second payment of the same amount. The UPI call timed out before the gateway confirmed.</td><td>Mark as paid (high)</td></tr>
+      <tr><td>Amount mismatch: MGW7300000023, file ₹62,000, recorded ₹62,500</td><td>The gateway captured ₹62,500 but settled ₹500 less. Drafts: "…the settlement file dated 13 Aug 2026 shows only ₹62,000 settled. Please clarify the reason for the ₹500 shortfall."</td><td>Escalate</td></tr>
+      <tr><td>Missing in settlement: MGW7300000039, ₹40,000</td><td>The gateway says SUCCESS; not in this file, not under a mistyped reference with the same amount, not in any other file.</td><td>Escalate</td></tr>
+      <tr><td>Staged in the eval: pending, and the parent then paid the same amount at the counter</td><td>Finds the second payment; marking the first as paid would count the money twice.</td><td>Escalate: possible duplicate</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="major">
+  <div class="cols" style="grid-template-columns: 1fr 1fr; align-items:start">
+    <figure class="shot cap-125">
+      <img src="../assets/doc/ai-copilot.png" alt="Copilot suggestion for a settled but pending payment">
+      <figcaption><b>Figure 16.</b> A Copilot suggestion: what it checked, the diagnosis with linked evidence, the database check, and <i>Accept: mark as paid</i>.</figcaption>
+    </figure>
+    <figure class="shot cap-125">
+      <img src="../assets/doc/ai-copilot-mismatch.png" alt="Copilot escalation for an amount mismatch">
+      <figcaption><b>Figure 17.</b> For the ₹500 shortfall it escalates and drafts the message to the gateway. An escalation can only be resolved by hand.</figcaption>
+    </figure>
+  </div>
+  <figure class="shot cap-68">
+    <img src="../assets/doc/ai-copilot-run.png" alt="Reconciliation run with Copilot suggestions">
+    <figcaption><b>Figure 18.</b> After <i>Investigate all</i>: every open exception carries a suggestion chip with its confidence, next to the manual actions.</figcaption>
+  </figure>
+  <p class="small"><b>Code:</b> <code>lib/ai/recon-copilot/</code> (graph, tools, prompts, schema, verify), <code>supabase/migrations/004_ai.sql</code> (<code>ai_investigations</code>, <code>save_ai_investigation</code>, <code>decide_ai_investigation</code>), streaming route <code>app/api/ai/recon-items/[id]/investigate</code>, <code>components/ai/copilot-drawer.tsx</code>.</p>
+</section>
+
+<section class="major" id="ai-ask">
+  <h3>12.2 Ask Kosha</h3>
+  <p><b>Problem.</b> Questions like "who in second-year B.Com owes more than ₹50,000?" or "how did UPI collections compare with last week?" today need filters, exports and a spreadsheet.</p>
+  <p><b>What it does.</b> A chat panel on every page. The answer leads with the number, shows a table whose rows open the student or payment, lists its sources, suggests follow-ups, and says how many figures were checked. The conversation carries over, so "only the BCA ones" or "how much do they owe in total?" work.</p>
+  <figure class="diagram cap-215">
+<pre class="mermaid">
+%%{init: {"flowchart": {"rankSpacing": 26, "nodeSpacing": 24, "wrappingWidth": 420, "padding": 8}, "themeVariables": {"fontSize": "17px"}}}%%
+flowchart TB
+  Q["question + recent conversation"] --> A["agent<br/>chooses tools, max 4"]
+  A <--> T["six typed read-only tools<br/>search_students · get_student_account · collections<br/>list_payments · fee_overview · reconciliation_overview"]
+  A --> C["compose<br/>text · linked table · sources · follow-ups"]
+  C --> V["verify<br/>every ₹ figure from a tool or the question<br/>every reference exists"]
+  V -- "fails once: back to the agent" --> A
+  V -- "passes" --> OUT["answer, 'N figures checked'"]
+  V -- "fails again" --> W["answer with a warning"]
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef ext fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  class Q,A,T,C sys
+  class V,W wait
+  class OUT ok
+</pre>
+    <figcaption><b>Figure 19.</b> Ask Kosha's graph. A failed check sends the model back to the tools, not just back to rewording, so a total it tried to add up itself gets looked up instead.</figcaption>
+  </figure>
+  <h4>Design decisions</h4>
+  <ul>
+    <li><b>Typed tools, not text-to-SQL.</b> The model fills validated parameters (course, status, minimum amount, date range, grouping); it can only read what these six functions return and can never write.</li>
+    <li><b>Arithmetic and dates in code.</b> Tools return totals for all matches, per-group comparisons and percentage changes. "Last week" is resolved in code (Monday to Sunday) and the exact ranges are given to the model, after the same question once gave two different weeks.</li>
+    <li><b>Ties are never cut.</b> "Who owes the most?" lists all three students on ₹1,73,000.</li>
+    <li><b>Stateless follow-ups.</b> The browser sends the recent turns (including the previous table) with each question, so it works on serverless hosting without a session store.</li>
+    <li><b>Read-only and on topic.</b> "Record a cash payment…" is refused with a pointer to the right screen; questions unrelated to the fees are declined.</li>
+  </ul>
+</section>
+
+<section class="major">
+  <figure class="shot cap-195">
+    <img src="../assets/doc/ai-ask.png" alt="Ask Kosha with a follow-up question">
+    <figcaption><b>Figure 20.</b> Ask Kosha: a question with a threshold, then the follow-up "only the BCA ones". Names link to the statements; each answer states how many figures were checked against the ledger.</figcaption>
+  </figure>
+  <p class="small"><b>Code:</b> <code>lib/ai/ask/</code> (tools, graph, periods, schema, verify, prompts), route <code>app/api/ai/ask</code>, <code>components/ai/ask-kosha.tsx</code>.</p>
+</section>
+
+<section class="major" id="ai-import">
+  <h3>12.3 Smart settlement import</h3>
+  <p><b>Problem.</b> Real settlement reports never use Kosha's four column names. They have "Txn Reference", gross, MDR, GST and net amounts, a payout UTR, a transaction date next to the settlement date, and DD/MM/YYYY 12-hour times. Retyping headers is slow and error-prone, and choosing the net amount would turn every card payment into a mismatch.</p>
+  <figure class="diagram cap-150">
+<pre class="mermaid">
+%%{init: {"sequence": {"actorMargin": 40, "messageMargin": 22, "boxMargin": 6}, "themeVariables": {"fontSize": "17px"}}}%%
+sequenceDiagram
+  participant B as Browser
+  participant S as Server
+  participant O as OpenAI
+  B->>B: header is not Kosha's format
+  B->>S: header + 25 sample rows
+  S->>O: column names and examples
+  O-->>S: proposed mapping
+  S->>S: convert the sample with code
+  opt under 90% convert
+    S->>O: failures + formats that parse
+    O-->>S: corrected mapping
+  end
+  S-->>B: mapping and reasons
+  B->>B: convert the whole file, preview
+  Note over B: accountant checks, edits, confirms
+  B->>S: standard CSV + mapping note
+  S->>S: normal reconciliation
+</pre>
+    <figcaption><b>Figure 21.</b> Smart import. The AI only chooses which column is which; deterministic code does every conversion, so a wrong choice shows up as rows that fail to convert, not as silently wrong numbers.</figcaption>
+  </figure>
+  <ul>
+    <li><b>Traps it has to avoid in the sample:</b> Net vs Gross amount, Txn Date vs Settlement Date, Settlement UTR vs Txn Reference. The eval requires all three right.</li>
+    <li><b>Every status value is seen.</b> Sampling includes at least one row per distinct value of each category-like column, and the preview lists every status in the whole file; reconciling is blocked until each one is mapped.</li>
+    <li><b>Day/month ambiguity.</b> If no date has a day above 12, DD/MM and MM/DD both convert every row with different dates, so the preview requires the accountant to confirm the format.</li>
+    <li><b>Remembered layouts.</b> A confirmed mapping can be saved for files with the same columns, and the run page records which mapping was used and who confirmed it.</li>
+  </ul>
+</section>
+
+<section class="major">
+  <figure class="shot cap-195">
+    <img src="../assets/doc/ai-import.png" alt="Smart import preview">
+    <figcaption><b>Figure 22.</b> The import preview for the gateway-layout sample: each choice with the assistant's reason in an editable dropdown, status meanings, notes on the ignored columns (including Net Settled), the result on all 37 rows and what will be reconciled.</figcaption>
+  </figure>
+  <p class="small"><b>Code:</b> <code>lib/domain/settlement-mapping.ts</code> (converter, pure and unit tested), <code>lib/ai/settlement-mapper.ts</code> (graph), route <code>app/api/ai/settlement-mapping</code>, <code>components/reconciliation/smart-import.tsx</code>. Sample: <code>public/samples/gateway_report_sep_2026.csv</code>.</p>
+</section>
+
+<section class="major" id="ai-messages">
+  <h3>12.4 Messages to parents</h3>
+  <p><b>Problem.</b> Reminders and overdue notices are typed by hand, often in the parent's language, and a wrong amount in a fee message damages trust.</p>
+  <figure class="diagram cap-150">
+<pre class="mermaid">
+%%{init: {"flowchart": {"rankSpacing": 26, "nodeSpacing": 24, "wrappingWidth": 420, "padding": 8}, "themeVariables": {"fontSize": "17px"}}}%%
+flowchart TB
+  L["student's ledger"] --> F["facts, in code<br/>amounts · due dates · installments · receipt · key figure"]
+  F --> W["write, by the model<br/>English / ಕನ್ನಡ / हिन्दी · WhatsApp / email<br/>plus an English version"]
+  W --> C["checks<br/>ledger amounts · key amount · ₹ digits<br/>script · no gender · length"]
+  C -- "fails once" --> W
+  C --> E["staff review and edit<br/>checks re-run on every edit"]
+  E --> CP["Copy · Kosha never sends"]
+  E -.-> AU["log_message_draft() · audit"]
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef ext fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  class L,F,W sys
+  class C wait
+  class E,CP,AU ok
+</pre>
+    <figcaption><b>Figure 23.</b> Drafting a message. The checks that run on the model's draft also run in the browser while staff edit, so a wrong amount typed by a person is flagged too.</figcaption>
+  </figure>
+  <ul>
+    <li><b>Four purposes</b>, available only when they apply: upcoming due, overdue notice (no penalties or threats; the college charges no late fees), balance explained, payment received (with the receipt number and what it paid for).</li>
+    <li><b>Kannada and Hindi</b> in natural, everyday language, always with an English version so staff who do not read the script can check what it says.</li>
+    <li><b>No assumed gender.</b> The first drafts wrote "your daughter" and "आपके पुत्र" from the names alone; Kosha does not record gender, so the prompt forbids it and a check fails any draft with gendered words in any of the three languages.</li>
+    <li><b>Amounts must be checkable</b>: written with ₹ and 0-9 digits, never in words or native digits.</li>
+  </ul>
+</section>
+
+<section class="major">
+  <figure class="shot cap-195">
+    <img src="../assets/doc/ai-message.png" alt="Kannada overdue notice">
+    <figcaption><b>Figure 24.</b> An overdue notice in Kannada for WhatsApp: every check passed, with the English version below. The drafting is recorded in the audit log; Kosha does not send it.</figcaption>
+  </figure>
+  <p class="small"><b>Code:</b> <code>lib/ai/parent-message/</code> (facts, draft graph, verify), route <code>app/api/ai/parent-message</code>, <code>supabase/migrations/005_ai_messages.sql</code>, <code>components/ai/parent-message-drawer.tsx</code>.</p>
+</section>
+
+<section class="major" id="ai-brief">
+  <h3>12.5 Daily finance brief</h3>
+  <p><b>Problem.</b> The dashboard shows everything; an accountant arriving in the morning needs to know what to do first.</p>
+  <figure class="diagram cap-195">
+<pre class="mermaid">
+%%{init: {"flowchart": {"rankSpacing": 26, "nodeSpacing": 24, "wrappingWidth": 420, "padding": 8}, "themeVariables": {"fontSize": "17px"}}}%%
+flowchart TB
+  C["collect, in code<br/>8 signal detectors with severity"] --> P["compose, by the model<br/>pick 3 · headline · one reason each"]
+  P --> R["review<br/>real signals · own actions<br/>figures from that signal"]
+  R -- "fails once" --> P
+  R -- "passes" --> SV["save_ai_brief(), once a day"]
+  R -- "fails again, or no AI" --> RB["rules brief: top 3 by severity"] --> SV
+  SV --> UI["dashboard card<br/>'ledger changed' check"]
+  classDef sys fill:#F4F7FD,stroke:#C9D5F2,color:#16213A
+  classDef ok fill:#F1F8F5,stroke:#B9DCCB,color:#16213A
+  classDef wait fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  classDef ext fill:#FBF6EC,stroke:#E6D3A8,color:#16213A
+  class C,P sys
+  class R,RB wait
+  class SV,UI ok
+</pre>
+    <figcaption><b>Figure 25.</b> The brief. Titles, figures, examples and links are the code's; the model's words are only the headline and the reasons. With no AI, a rules brief takes its place.</figcaption>
+  </figure>
+  <ul>
+    <li><b>Signals are counted once.</b> The same exception in two runs of the same file counts once; the link goes to the newest run.</li>
+    <li><b>It knows when it is out of date.</b> A fingerprint of the signals is compared on every dashboard load; after a payment the card says "The ledger has changed since this was written" and highlights Refresh.</li>
+    <li><b>Calm tone.</b> Early briefs said "to secure ₹8,81,000" and "significant revenue loss"; the prompt now asks for plain, calm wording, and the eval's quiet day checks that no urgency is invented.</li>
+  </ul>
+  <figure class="shot cap-85">
+    <img src="../assets/doc/ai-brief.png" alt="Today's brief on the dashboard">
+    <figcaption><b>Figure 26.</b> Today's brief on the demo ledger: stuck payments first, then open exceptions, then long-overdue students, each with example records and an action; the rest under "Also noted".</figcaption>
+  </figure>
+  <p class="small"><b>Code:</b> <code>lib/ai/brief/</code> (signals, brief graph), <code>lib/data/brief.ts</code>, route <code>app/api/ai/brief</code>, <code>supabase/migrations/006_ai_brief.sql</code>, <code>components/ai/daily-brief.tsx</code>.</p>
+</section>
+
+<section class="major" id="ai-evals">
+  <h3>12.6 How the AI features are tested</h3>
+  <p>Two layers. <b>Unit tests</b> cover every deterministic part (verifiers, date periods, the settlement converter, the signal detectors), including the failure cases the verifiers exist to catch: a made-up amount, an unknown evidence id, a forbidden action, an undisclosed duplicate, an amount written in words or Kannada digits, a gendered word in Hindi. <b>Evaluations</b> (<code>npm run eval:ai</code>) run the real model on cases whose right answer is known, with the answer computed independently from the database, not by the feature's own tools.</p>
+  <table>
+    <thead><tr><th style="width:24%">Evaluation</th><th>Cases</th><th class="num" style="width:12%">Result</th></tr></thead>
+    <tbody>
+      <tr><td>Reconciliation Copilot</td><td>Settled but pending → mark as paid; ₹500 shortfall → never mark as paid, cause "settlement short", gateway message mentions ₹500; missing → never mark as paid, file searched; staged double payment → possible duplicate, not marked paid.</td><td class="num">4/4</td></tr>
+      <tr><td>Ask Kosha</td><td>Number of overdue students; college-wide overdue total; the top debtor (with ties); last week's collections; everyone with a pending payment; a two-turn follow-up; refusing to delete a payment.</td><td class="num">8/8</td></tr>
+      <tr><td>Smart import and messages</td><td>The gateway layout (gross, settlement date, reference, DD/MM/YYYY); a layout in paise with ISO dates and no status column; four messages in Kannada, Hindi and English for WhatsApp and email.</td><td class="num">6/6</td></tr>
+      <tr><td>Daily brief</td><td>The demo ledger; a busy day where stuck payments and a shortfall must lead, not the advance; a quiet day with no invented urgency.</td><td class="num">3/3</td></tr>
+    </tbody>
+  </table>
+  <p>The evaluations found real problems: a duplicate check blind to a payment made 8 days later, "last week" meaning two different weeks, a tie cut to one student, YYYY/MM/DD chosen for dashed dates, and "who owes the most?" answered from only the DUE students, with correct figures that the verifier passed. <b>The verifier catches invented numbers; the evaluations catch wrong interpretations.</b> All are fixed and logged in <code>AI_LOG.md</code>.</p>
+
+  <h3>12.7 Cost and speed</h3>
+  <p class="small">All features use <code>gpt-4.1-mini</code> at temperature 0, with a 45-second timeout and two retries (set by <code>OPENAI_MODEL</code>). Each use records its token count.</p>
+  <table>
+    <thead><tr><th style="width:28%">Feature</th><th class="num">Typical time</th><th class="num">Tokens per use</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Copilot, one exception</td><td class="num">6 to 8 s</td><td class="num">5,000 to 6,000</td><td>2 to 3 tool calls, streamed live.</td></tr>
+      <tr><td>Ask Kosha, one question</td><td class="num">4 to 8 s</td><td class="num">5,000 to 8,000</td><td>Up to 17 s for long tables.</td></tr>
+      <tr><td>Smart import</td><td class="num">about 3 s</td><td class="num">about 1,600</td><td>Once per new layout.</td></tr>
+      <tr><td>Message to a parent</td><td class="num">2 to 6 s</td><td class="num">1,300 to 2,000</td><td>Includes the English version.</td></tr>
+      <tr><td>Daily brief</td><td class="num">about 4 s</td><td class="num">about 1,200</td><td>Once a day.</td></tr>
+    </tbody>
+  </table>
+
+</section>
+
+<!-- ============================ 13. Future ============================ -->
+<section class="major" id="future">
+  <h2>13. Limitations and future work</h2>
+  <h3>Out of scope by design</h3>
+  <ul>
+    <li><b>A real payment gateway</b> (webhooks with signature checks, status polling, settlement file download).</li>
+    <li><b>Real authentication and per-user row-level security</b>, replacing the role cookie; per-student access for parents.</li>
+    <li><b>Late fees</b> and interest on overdue installments.</li>
+    <li><b>A fee-structure editor</b>: fee heads, amounts and due dates per course and term.</li>
+    <li><b>Multiple institutions</b> (tenancy) and multiple academic years side by side.</li>
+    <li><b>Email and SMS</b>: receipts, reminders before due dates, notices of reversals.</li>
+    <li><b>Partial refunds</b>; today a payment can only be reversed in full.</li>
+  </ul>
+  <h3>Known limitations</h3>
+  <ul>
+    <li>Anyone with the demo link can switch to Admin and reset the data. Acceptable for a demo; the first thing real auth removes.</li>
+    <li>Reconciliation loads all gateway payments into memory for matching, fine for thousands of rows; at scale the window filter should move into SQL.</li>
+    <li>Settlement fees (MDR) are not modelled, so a real gateway's net settlements would all show as mismatches until fees are added as a column.</li>
+    <li>A settled-but-pending item that is later confirmed through check status stays open until someone resolves it (resolving it then records "already confirmed").</li>
+    <li>Receipt numbers come from a sequence and can have gaps after a rolled-back transaction.</li>
+    <li>A receipt lists the installments its payment pays today; if an advance is applied later, an old receipt gains a line. A receipt snapshot table would freeze it.</li>
+    <li>The dashboard is computed per request; a materialised daily summary would be needed for many thousands of students.</li>
+  </ul>
+  <h3>AI limitations</h3>
+  <ul>
+    <li>The verifiers catch invented figures and references, not a wrong interpretation with real figures (a wrong filter, a misread question). The evaluations cover the known cases; a larger evaluation set, run on every change to a prompt or model, is the next step.</li>
+    <li>The model's answers can vary slightly between runs even at temperature 0; decisions that matter always pass through a person.</li>
+    <li>Features depend on OpenAI being reachable. Without it, the buttons are hidden and the daily brief falls back to rules.</li>
+    <li>Sample rows sent for smart import can include payer names. A deployment would need a data-processing agreement with the provider, or an option to mask names before sending.</li>
+    <li>Kannada and Hindi drafts are checked for script, figures and gender, not fluency, and the one-investigation-per-item guard is in server memory (several servers would need it in the database).</li>
+  </ul>
+</section>
+
+<!-- ============================ 13. AI usage ============================ -->
+<section class="major" id="ai">
+  <h2>14. AI usage report</h2>
+  <p class="small">Drafted only from the entries in <code>AI_LOG.md</code> (30 entries, written as the work happened; entries 15 to 30 cover the AI features). Highlighted text is for the candidate to complete in their own words.</p>
+
+  <h3>AI tool used</h3>
+  <p>Claude Code (Anthropic's coding agent, model Claude Opus 5.5), running in the Claude desktop app with access to the project folder, a shell, a browser pane and Playwright. <span class="placeholder">[Darshan: confirm, and add any other tools you used]</span></p>
+
+  <h3>What I asked AI to do</h3>
+  <p>I wrote a detailed project brief (stack, domain rules, design system, phases with a definition of done for each) and asked the assistant to build it phase by phase: database schema, money functions and seed; domain layer, API and tests; design system and screens; payments, receipts and reconciliation; end-to-end tests, README and this document. After each phase I reviewed the result and approved the next. <span class="placeholder">[Darshan: add your own words on how you directed and reviewed the work]</span></p>
+
+  <h3>Most useful prompt</h3>
+  <p><span class="placeholder">[Darshan: add the prompt you found most useful, for example the brief's rule "the database is the source of truth for all money rules; every money-changing operation is a single PostgreSQL function", or the instruction to log every mistake in AI_LOG.md]</span></p>
+
+  <h3>Code generated by AI</h3>
+  <p>Most of the code was generated by the assistant from the brief: the SQL migrations and functions, the seed, the domain functions and their tests, the API routes, the components and pages, the Playwright tests and the documentation build. <span class="placeholder">[Darshan: state the proportion in your own words]</span></p>
+
+  <h3>Code I modified</h3>
+  <p><span class="placeholder">[Darshan: list what you changed or decided yourself, e.g. choices you made at the phase reviews]</span></p>
+
+  <h3>AI output that was wrong, how I identified it, how it was fixed</h3>
+  <table>
+    <thead><tr><th style="width:27%">What was wrong</th><th style="width:25%">How it was identified</th><th>How it was fixed</th></tr></thead>
+    <tbody>
+      <tr><td>Seed payment dates only took 4 distinct values (<code>(i*11) % 44</code>).</td><td>Grouping payments by day in a dry run on an in-memory Postgres.</td><td>Coprime step <code>(i*17) % 45</code>; re-verified.</td></tr>
+      <tr><td>Row types clashed with supabase-js inference (embedded relations typed as arrays).</td><td><code>npm run typecheck</code> errors.</td><td>Query helper returns the row type declared at the call site.</td></tr>
+      <tr><td>Payment search ORed across an embedded table, which PostgREST cannot do.</td><td>Re-reading the query before running it.</td><td>Match students first, then OR on ids.</td></tr>
+      <tr><td>Cached demo-student id would go stale after a reset.</td><td>Self-review of the reset route.</td><td>Cache removed.</td></tr>
+      <tr><td>Awkward audit sentences and "already success" error text.</td><td>Reading API smoke-test output.</td><td>Rewrote the copy; "₹" instead of "Rs" in SQL messages.</td></tr>
+      <tr><td>Tailwind opacity modifiers on CSS-variable colours generated nothing.</td><td>Self-review before the first screenshot.</td><td>RGB channel variables with <code>&lt;alpha-value&gt;</code>.</td></tr>
+      <tr><td>Dates rendered "24 Sept 2026", then "05 Jan 2027".</td><td>Dashboard screenshot; then a new unit test.</td><td>Fixed month names, unpadded day.</td></tr>
+      <tr><td>Layout issues: misaligned fee-head bars, approver in the monospaced column, phone overflow, a sentence entirely red, a redundant advance sentence, a palette loading flash.</td><td>Reading 1440 px and 390 px screenshots.</td><td>Fixed column, secondary line, phone layouts, split sentence, prefetch.</td></tr>
+      <tr><td>Invisible combining characters in a regex after a scripted edit.</td><td>An odd diff line, confirmed with <code>od -c</code>.</td><td><code>\p{Diacritic}</code>.</td></tr>
+      <tr><td>Select chevron written as a Tailwind class containing spaces, so no dropdown showed its arrow.</td><td>A Playwright locator error printed the split classes.</td><td>Moved to a CSS class.</td></tr>
+      <tr><td>Toasts covered the drawer's submit; weak selected state; truncated "Bank transfer"; receipt spilled onto a second page; an ALL-CAPS title against the brief.</td><td>Screenshots, a PDF render of the receipt, re-reading the brief.</td><td>Toasts bottom-left, ink fill for selection, 2×2 on phones, tighter print spacing, sentence case.</td></tr>
+      <tr><td>Test scripts waited on the wrong signal or read the wrong element, reporting failures in working features.</td><td>Results contradicted the screen; checked through the API.</td><td>Wait for the specific toast or dialog; filter alerts by text.</td></tr>
+      <tr><td>Dashboard: duplicated open items after a repeated upload, overflowing badge, mismatched counts, a smoothed trend line, a blank chart in one capture.</td><td>Reading dashboard screenshots.</td><td>De-duplication, short labels, clear counts, straight segments, initial chart size.</td></tr>
+      <tr><td>Copilot findings cited the exception itself; a search tool called 36 rows "similar" because references are sequential.</td><td>Reading the first live investigations.</td><td>Evidence ids for every check; near-identical reference counts only with the same amount.</td></tr>
+      <tr><td>The duplicate-risk check accepted "no duplicate"; the duplicate search looked only 7 days back, and the eval passed anyway.</td><td>A unit test; the eval's summary table said pass: false.</td><td>Risk must be in risks or next steps; any later same-amount payment counts; stricter eval judge.</td></tr>
+      <tr><td>A LangGraph node named like a state field (twice, in AI-2 and AI-3).</td><td>The graph refused to compile on the first call.</td><td>Renamed; every graph checked.</td></tr>
+      <tr><td>"Last week" meant two different weeks on the same day; a follow-up total added up by the model; a tie cut to one student; placeholder cells.</td><td>UI screenshots and the Ask Kosha eval.</td><td>Date ranges resolved in code; failed checks go back to the tools; ties kept; per-group comparisons.</td></tr>
+      <tr><td>"Who owes the most?" answered from the DUE students only, with correct figures.</td><td>The full eval run (7/8), then asking three times.</td><td>Filter description rewritten; 8/8 twice.</td></tr>
+      <tr><td>The import sample missed the only "Failed" row; a wrong day/month choice converted without errors; YYYY/MM/DD chosen for dashed dates twice.</td><td>Reading the proposal, a unit test, the AI-3 eval.</td><td>Sampling covers every status value; ambiguity confirmation; retry told which formats parse.</td></tr>
+      <tr><td>Drafted messages guessed gender ("your daughter", "आपके पुत्र"); early briefs used alarmist wording.</td><td>Reading the drafts and the first brief.</td><td>Gender rule plus a check in three languages; calmer prompt and a quiet-day eval.</td></tr>
+    </tbody>
+  </table>
+  <p><span class="placeholder">[Darshan: add anything you caught yourself during review that is not in the log]</span></p>
+</section>
+
+<script src="../../node_modules/mermaid/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "base",
+    securityLevel: "loose",
+    flowchart: { useMaxWidth: true, htmlLabels: true, curve: "basis" },
+    er: { useMaxWidth: true },
+    sequence: { useMaxWidth: true, mirrorActors: false },
+    themeVariables: {
+      background: "#FFFFFF",
+      primaryColor: "#F4F7FD",
+      primaryBorderColor: "#C9D5F2",
+      primaryTextColor: "#16213A",
+      lineColor: "#8A93A6",
+      secondaryColor: "#F1F8F5",
+      tertiaryColor: "#FBF6EC",
+      fontFamily: "IBM Plex Sans",
+      fontSize: "13px",
+    },
+  });
+  document.fonts.ready
+    .then(() => mermaid.run({ querySelector: "pre.mermaid" }))
+    .catch((e) => console.error("mermaid", e))
+    .finally(() => { window.__diagramsDone = true; });
+</script>
+</body>
+</html>
