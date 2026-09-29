@@ -18,8 +18,12 @@
     "db:verify": "node scripts/db-setup.ts verify",
     "db:sample": "node scripts/make-settlement-sample.ts && node scripts/make-gateway-report.ts",
     "test:unit": "vitest run tests/unit",
+    "docs:screens": "node scripts/screenshots.ts",
+    "docs:build": "node scripts/build-pdf.ts",
+    "docs:pdf": "node scripts/screenshots.ts && node scripts/build-pdf.ts",
     "db:migrate": "node scripts/db-setup.ts migrate",
-    "eval:ai": "vitest run --config vitest.eval.config.ts"
+    "eval:ai": "vitest run --config vitest.eval.config.ts",
+    "docs:ai-screens": "node scripts/ai-screenshots.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",

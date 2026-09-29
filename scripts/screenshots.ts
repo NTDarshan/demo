@@ -30,11 +30,13 @@ async function api(path: string, init: RequestInit = {}) {
   return (await res.json()).data;
 }
 
-async function shot(page: Page, name: string, opts: { fullPage?: boolean; clipHeight?: number } = {}) {
+/** Viewport or full-page shot, or just one element (e.g. "main", so the sidebar doesn't eat page width). */
+async function shot(page: Page, name: string, opts: { fullPage?: boolean; clipHeight?: number; element?: string } = {}) {
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(250);
   const file = join(out, `${name}.png`);
-  if (opts.clipHeight) await page.screenshot({ path: file, clip: { x: 0, y: 0, width: 1440, height: opts.clipHeight } });
+  if (opts.element) await page.locator(opts.element).first().screenshot({ path: file });
+  else if (opts.clipHeight) await page.screenshot({ path: file, clip: { x: 0, y: 0, width: 1440, height: opts.clipHeight } });
   else await page.screenshot({ path: file, fullPage: opts.fullPage ?? false });
   console.log(`saved docs/assets/doc/${name}.png`);
 }
@@ -58,7 +60,7 @@ try {
   await page.waitForURL(/\/reconciliation\/[0-9a-f-]{36}/);
   await page.waitForLoadState("networkidle");
   await page.getByRole("tab", { name: /Amount mismatch/ }).click();
-  await shot(page, "reconciliation-run", { clipHeight: 640 });
+  await shot(page, "reconciliation-run", { element: "main" });
 
   await go("/");
   await page.locator(".recharts-surface").first().waitFor();
@@ -68,7 +70,7 @@ try {
   await shot(page, "students");
 
   await go("/students/CSE24-003");
-  await shot(page, "statement", { fullPage: true });
+  await shot(page, "statement", { element: "main" });
 
   await go("/students/CSE24-001");
   await page.getByRole("button", { name: "Record payment" }).first().click();
@@ -80,14 +82,15 @@ try {
   const arjun = await api("/api/payments?q=CSE24-003");
   const returned = arjun.find((p: { receiptNo: string | null }) => p.receiptNo?.endsWith("000005"));
   await go(`/payments/${returned.id}`);
-  await shot(page, "payment-detail", { fullPage: true });
+  await shot(page, "payment-detail", { element: "main" });
 
   const karthik = await api("/api/payments?q=BCOM25-002");
   await go(`/payments/${karthik[0].id}/receipt`);
-  await shot(page, "receipt", { clipHeight: 1000 });
+  await shot(page, "receipt", { element: "article" });
 
   await go("/audit");
-  await shot(page, "audit", { clipHeight: 620 });
+  await page.setViewportSize({ width: 1440, height: 640 });
+  await shot(page, "audit", { element: "main" });
 } finally {
   await browser.close();
   await api("/api/demo/reset", { method: "POST" });
