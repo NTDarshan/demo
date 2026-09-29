@@ -94,14 +94,14 @@ schema) and reapplies everything. The same reset is available in the app for adm
 | `npm run test:unit` / `test:integration` | One suite only |
 | `npm run e2e` | Playwright end-to-end smoke tests (starts `npm run dev` if nothing is running on port 3000) |
 | `npm run db:setup` / `db:reset` / `db:verify` | Apply migrations / drop and reapply / run [`scripts/verify-ledger.sql`](scripts/verify-ledger.sql) |
-| `npm run db:migrate` | Apply the AI migrations (`004`, `005`) to a database that already has 001 to 003 (idempotent) |
-| `npm run eval:ai` | Run the AI evaluations (Copilot, Ask Kosha, smart import, parent messages) against OpenAI and the demo database (the Copilot eval resets demo data) |
+| `npm run db:migrate` | Apply the AI migrations (`004` to `006`) to a database that already has 001 to 003 (idempotent) |
+| `npm run eval:ai` | Run the AI evaluations (Copilot, Ask Kosha, smart import, parent messages, daily brief) against OpenAI and the demo database (the Copilot eval resets demo data) |
 | `npm run db:sample` | Regenerate `public/samples/settlement_sample.csv` from freshly seeded data |
 | `npm run docs:pdf` | Capture fresh screenshots and build `docs/Kosha_Documentation.pdf` (needs the app running) |
 
 ## Tests
 
-- **Unit** (`tests/unit`, 181 tests): settlement-file mapping (dates, amounts, ambiguity, sampling), message checks in three languages, the AI verifiers (made-up figures, unknown evidence,
+- **Unit** (`tests/unit`, 192 tests): daily-brief signals and review, settlement-file mapping (dates, amounts, ambiguity, sampling), message checks in three languages, the AI verifiers (made-up figures, unknown evidence,
   forbidden actions, undisclosed duplicates), date periods for Ask Kosha, the file search and audit sentences; payment state machine (every legal and illegal transition,
   and a check that the TypeScript table matches the SQL one), reconciliation bucketing (duplicates,
   bad rows, amount formats, the settlement window, CSV edge cases), `toPaise`/`formatINR`/amount in
@@ -236,6 +236,30 @@ email.
 
 **Eval:** `npm run eval:ai` also maps two unfamiliar layouts with known right answers and drafts
 four messages (Kannada, Hindi and English, WhatsApp and email). Current result: 6/6.
+
+### Daily finance brief
+
+The dashboard opens with **Today's brief**: the three things that most need attention today, each
+with the reason, example records and a button that goes to the right screen.
+
+- **Code finds the signals** ([`lib/ai/brief/signals.ts`](lib/ai/brief/signals.ts), pure and unit
+  tested) and gives each a severity score: payments stuck in pending for over a day, open
+  reconciliation exceptions (counted once across repeated runs, with the shortfall), students who
+  became overdue this week, students overdue for over 30 days, dues in the next 7 days, a drop in
+  collections against the previous week, failed or reversed payments, and advances.
+- **The AI picks and explains.** A LangGraph loop (collect → compose → review) has the model choose
+  the three most important and write a headline and one reason each. Titles, figures, examples and
+  links stay the code's. Review checks that the picks are real signals, each action belongs to its
+  signal, and every figure comes from that same signal. A brief that still fails is replaced by
+  the rules brief.
+- **Works without AI.** With no OpenAI key, or if the model fails, a rules brief (top three by
+  severity) is shown instead, so the card is never empty.
+- **Once a day, and it knows when it is out of date.** The first dashboard visit writes the brief
+  and saves it (`save_ai_brief()` in [`006_ai_brief.sql`](supabase/migrations/006_ai_brief.sql)).
+  After that it is read back. A fingerprint of the signals is compared on every load, and the
+  card says "The ledger has changed since this was written" with a Refresh button.
+- **Eval:** today's demo ledger, a busy synthetic day (stuck payments and a shortfall must lead,
+  not the advance) and a quiet day (no invented urgency). Current result: 3/3.
 
 ## How it is built
 

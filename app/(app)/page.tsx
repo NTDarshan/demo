@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { AskKoshaSuggestions } from "@/components/ai/ask-kosha";
+import { DailyBrief } from "@/components/ai/daily-brief";
+import { computeSignals, signalsFingerprint } from "@/lib/ai/brief/signals";
+import { latestBrief, loadBriefInput } from "@/lib/data/brief";
+import { isoDateIST } from "@/lib/dates";
 import { CollectionsTrend } from "@/components/dashboard/collections-trend";
 import { OverdueByCourse } from "@/components/dashboard/overdue-by-course";
 import { Money } from "@/components/money";
@@ -20,7 +24,8 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   await guardPage("dashboard.view");
-  const d = await getDashboard();
+  const [d, briefInput, brief] = await Promise.all([getDashboard(), loadBriefInput(), latestBrief(isoDateIST())]);
+  const fingerprint = signalsFingerprint(computeSignals(briefInput));
   const s = d.summary;
   const attentionCount = d.attention.pendingPayments.length + d.attention.reconItems.length + d.attention.longOverdue.length;
 
@@ -51,6 +56,7 @@ export default async function DashboardPage() {
         ))}
       </section>
 
+      <DailyBrief className="mt-5" initial={brief} fingerprint={fingerprint} />
       <AskKoshaSuggestions className="mt-5" />
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
